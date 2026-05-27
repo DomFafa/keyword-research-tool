@@ -1,0 +1,15 @@
+{
+  "name": "keyword-research-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "read:sheet": "node src/read-google-sheet.mjs",
+    "semrush:step1": "node src/semrush-step1.mjs",
+    "check": "for file in $(find src test -name '*.mjs' | sort); do node --check \"$file\" || exit 1; done",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

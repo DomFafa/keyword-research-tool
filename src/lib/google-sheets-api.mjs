@@ -1,0 +1,254 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { getSpreadsheetId } from "./google-sheet.mjs";
+
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+
+function base64UrlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function findDefaultServiceAccountKeyPath() {
+  const explicit = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (explicit && fs.existsSync(explicit)) {
+    return explicit;
+  }
+
+  const secretsDir = path.resolve("secrets");
+  if (!fs.existsSync(secretsDir)) {
+    return "";
+  }
+  const file = fs.readdirSync(secretsDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => path.join(secretsDir, name))
+    .find((candidate) => {
+      try {
+        const json = JSON.parse(fs.readFileSync(candidate, "utf8"));
+        return json.type === "service_account" && json.client_email && json.private_key;
+      } catch {
+        return false;
+      }
+    });
+  return file || "";
+}
+
+export function resolveServiceAccountKeyPath(keyPath = "") {
+  if (keyPath) {
+    return keyPath;
+  }
+  return findDefaultServiceAccountKeyPath();
+}
+
+export async function getServiceAccountAccessToken(keyPath = "") {
+  const resolvedKeyPath = resolveServiceAccountKeyPath(keyPath);
+  if (!resolvedKeyPath) {
+    return { ok: false, skipped: true, reason: "service_account_key_not_found" };
+  }
+
+  const key = JSON.parse(fs.readFileSync(resolvedKeyPath, "utf8"));
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: key.client_email,
+    scope: SHEETS_SCOPE,
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now
+  };
+  const unsigned = `${base64UrlJson(header)}.${base64UrlJson(claim)}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(unsigned);
+  const jwt = `${unsigned}.${signer.sign(key.private_key).toString("base64url")}`;
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    return { ok: false, status: response.status, reason: data.error_description || data.error || "token_request_failed" };
+  }
+
+  return {
+    ok: true,
+    accessToken: data.access_token,
+    clientEmail: key.client_email,
+    keyPath: resolvedKeyPath
+  };
+}
+
+async function sheetsApiFetch({
+  sheetUrl,
+  path,
+  method = "GET",
+  body,
+  keyPath = ""
+}) {
+  const token = await getServiceAccountAccessToken(keyPath);
+  if (!token.ok) {
+    return { ok: false, skipped: true, reason: token.reason, status: token.status };
+  }
+
+  const spreadsheetId = getSpreadsheetId(sheetUrl);
+  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token.accessToken}`,
+      "content-type": "application/json"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return {
+      ok: false,
+      status: response.status,
+      reason: data.error?.message || response.statusText || "sheets_api_request_failed",
+      data
+    };
+  }
+
+  return {
+    ok: true,
+    data,
+    clientEmail: token.clientEmail
+  };
+}
+
+export async function getSheetValues({ sheetUrl, range, keyPath = "" }) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    path: `/values/${encodeURIComponent(range)}`
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    range: result.data.range,
+    values: result.data.values || [],
+    clientEmail: result.clientEmail
+  };
+}
+
+export async function updateSheetValues({
+  sheetUrl,
+  range,
+  values,
+  valueInputOption = "USER_ENTERED",
+  keyPath = ""
+}) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    method: "PUT",
+    path: `/values/${encodeURIComponent(range)}?valueInputOption=${encodeURIComponent(valueInputOption)}`,
+    body: { values }
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    ...result.data,
+    clientEmail: result.clientEmail
+  };
+}
+
+export async function clearSheetValues({ sheetUrl, range, keyPath = "" }) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    method: "POST",
+    path: `/values/${encodeURIComponent(range)}:clear`,
+    body: {}
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    ...result.data,
+    clientEmail: result.clientEmail
+  };
+}
+
+export async function batchUpdateSheet({ sheetUrl, requests, keyPath = "" }) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    method: "POST",
+    path: ":batchUpdate",
+    body: { requests }
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    replies: result.data.replies || [],
+    clientEmail: result.clientEmail
+  };
+}
+
+export function buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows }) {
+  const requests = [];
+  rows.forEach((row, index) => {
+    if (row?.判断 !== "拒绝") {
+      return;
+    }
+    const rowIndex = startRow + index - 1;
+    requests.push({
+      repeatCell: {
+        range: {
+          sheetId: Number(sheetId),
+          startRowIndex: rowIndex,
+          endRowIndex: rowIndex + 1,
+          startColumnIndex: 1,
+          endColumnIndex: 2
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 1, green: 0, blue: 0 }
+          }
+        },
+        fields: "userEnteredFormat.backgroundColor"
+      }
+    });
+  });
+  return requests;
+}
+
+export async function formatRejectedKeywordCells({
+  sheetUrl,
+  sheetId,
+  startRow,
+  rows,
+  keyPath = ""
+}) {
+  const requests = buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows });
+  if (requests.length === 0) {
+    return { skipped: true, reason: "no_rejected_rows" };
+  }
+
+  const result = await batchUpdateSheet({ sheetUrl, requests, keyPath });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      reason: result.reason || "batch_update_failed"
+    };
+  }
+
+  return {
+    ok: true,
+    formattedCells: requests.length,
+    clientEmail: result.clientEmail
+  };
+}
