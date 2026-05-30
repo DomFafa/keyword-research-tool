@@ -298,7 +298,8 @@ async function main() {
     ? pending.map((item) => ({
         rowNumber: item.rowNumber,
         values: evaluateKeywordAgentRow(item.row, item.rule).values,
-        modelRationale: ""
+        modelRationale: "",
+        warnings: []
       }))
     : await evaluateKeywordRowsWithOpenAI(pending, { model: model || undefined });
   const evaluationByRow = new Map(evaluations.map((evaluation) => [Number(evaluation.rowNumber), evaluation]));
@@ -349,6 +350,7 @@ async function main() {
       changed,
       values: Object.fromEntries(changed.map((header) => [header, values[normalizedHeaderIndex(keywordTable.headers, header)]])),
       modelRationale: evaluation.modelRationale,
+      warnings: evaluation.warnings || [],
       writeResult
     });
     if (!dryRun && writeDelayMs > 0) {
