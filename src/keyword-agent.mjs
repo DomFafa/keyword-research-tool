@@ -19,6 +19,7 @@ import {
   createHttpResearchProvider,
   createNoopResearchProvider
 } from "./lib/keyword-research-provider.mjs";
+import { detectResearchNeeds } from "./lib/keyword-research-boundary.mjs";
 import { evaluateKeywordRowsWithOpenAI } from "./lib/openai-keyword-agent.mjs";
 
 const TASK_SHEET = "词根拓展";
@@ -53,6 +54,113 @@ function researchSummaryFields(research) {
     researchSkipped: Boolean(research.skipped),
     researchError: research.error || "",
     researchSkipReason: research.skipReason || ""
+  };
+}
+
+function compactList(values) {
+  return values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function countRows(rows) {
+  return Array.isArray(rows) ? rows.length : Number(rows || 0);
+}
+
+function resolvedModelName(mode, model) {
+  return isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini");
+}
+
+function summarizeRule(rule = {}) {
+  return {
+    root: String(rule["词根"] || "").trim(),
+    keyword: String(rule["关键词"] || "").trim(),
+    intent: String(rule["意图"] || "").trim(),
+    monetizationChannels: compactList([rule["变现渠道1"], rule["变现渠道2"]]),
+    abilities: compactList([rule["能力1"], rule["能力2"]])
+  };
+}
+
+export function buildPlanOnlySummary({
+  sheetUrl = "",
+  taskSheet = TASK_SHEET,
+  keywordSheet = KEYWORD_TOTAL_SHEET,
+  mode = "llm",
+  model = "",
+  dryRun = false,
+  force = false,
+  limit = DEFAULT_LIMIT,
+  fromRow = 0,
+  toRow = 0,
+  researchEnabled = false,
+  researchMaxItems = 5,
+  researchEndpoint = "",
+  researchFailOpen = true,
+  selectedRows = [],
+  pending = [],
+  collectedSummaries = [],
+  ranAt = new Date().toISOString()
+} = {}) {
+  const plannedRows = pending.map((item) => {
+    const planRow = {
+      row: item.rowNumber,
+      keyword: item.keyword,
+      status: "planned",
+      mode,
+      model: resolvedModelName(mode, model),
+      wouldEvaluate: true,
+      wouldWrite: false,
+      force,
+      rule: summarizeRule(item.rule)
+    };
+
+    if (researchEnabled) {
+      const researchNeed = detectResearchNeeds({
+        keyword: item.keyword,
+        rule: item.rule,
+        keywordRecord: item.keywordRecord
+      });
+      planRow.researchNeeded = researchNeed.needed;
+      planRow.researchReasons = researchNeed.reasons;
+      planRow.researchLevel = researchNeed.level;
+      planRow.researchProvider = "";
+      planRow.researchSkipped = true;
+      planRow.researchSkipReason = "plan_only";
+    }
+
+    return planRow;
+  });
+
+  return {
+    source: {
+      sheetUrl,
+      taskSheet,
+      keywordSheet,
+      dryRun,
+      planOnly: true,
+      force,
+      mode,
+      model: resolvedModelName(mode, model),
+      limit,
+      fromRow,
+      toRow,
+      research: {
+        enabled: researchEnabled,
+        effective: false,
+        planOnlyProviderSkipped: researchEnabled,
+        endpointConfigured: Boolean(researchEndpoint),
+        maxResearchItems: researchMaxItems,
+        failOpen: researchFailOpen
+      },
+      ranAt
+    },
+    selectedRows: countRows(selectedRows),
+    pendingRows: pending.length,
+    updatedRows: 0,
+    skippedRows: collectedSummaries.length,
+    wouldEvaluateRows: pending.length,
+    wouldWriteRows: 0,
+    rows: [...collectedSummaries, ...plannedRows]
   };
 }
 
@@ -293,6 +401,7 @@ async function main() {
   const toRow = Number(readArg("to-row", "0")) || 0;
   const limit = Number(readArg("limit", String(DEFAULT_LIMIT))) || DEFAULT_LIMIT;
   const dryRun = readFlag("dry-run");
+  const planOnly = readFlag("plan-only") || readFlag("preflight");
   const force = readFlag("force");
   const mode = readArg("mode", "llm");
   const model = readArg("model", process.env.OPENAI_MODEL || "");
@@ -324,6 +433,31 @@ async function main() {
   const researchIgnoredInRulesMode = researchEnabled && isRulesMode(mode);
   const researchProviderMissing = researchEnabled && !dryRun && !researchIgnoredInRulesMode && !researchEndpoint;
   let researchProviderName = "";
+
+  if (planOnly) {
+    const summary = buildPlanOnlySummary({
+      sheetUrl,
+      taskSheet: TASK_SHEET,
+      keywordSheet: KEYWORD_TOTAL_SHEET,
+      mode,
+      model,
+      dryRun,
+      force,
+      limit,
+      fromRow,
+      toRow,
+      researchEnabled,
+      researchMaxItems,
+      researchEndpoint,
+      researchFailOpen,
+      selectedRows,
+      pending,
+      collectedSummaries: summaries
+    });
+    await writeJson(out, summary);
+    console.log(`Plan-only ${summary.pendingRows}/${summary.selectedRows} pending row(s). Wrote ${out}`);
+    return;
+  }
 
   if (researchEnabled && !researchIgnoredInRulesMode) {
     const provider = dryRun
@@ -395,7 +529,7 @@ async function main() {
       keyword,
       status: dryRun ? "dry-run" : "updated",
       mode,
-      model: isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
+      model: resolvedModelName(mode, model),
       changed,
       values: Object.fromEntries(changed.map((header) => [header, values[normalizedHeaderIndex(keywordTable.headers, header)]])),
       modelRationale: evaluation.modelRationale,
@@ -414,9 +548,10 @@ async function main() {
       taskSheet: TASK_SHEET,
       keywordSheet: KEYWORD_TOTAL_SHEET,
       dryRun,
+      planOnly: false,
       force,
       mode,
-      model: isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
+      model: resolvedModelName(mode, model),
       writeDelayMs,
       limit,
       fromRow,
