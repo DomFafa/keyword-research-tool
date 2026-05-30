@@ -2,9 +2,54 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AGENT_STATUS_COLUMN,
+  KEYWORD_AGENT_SYSTEM_PROMPT,
+  buildPromptPayload,
   normalizeDecision,
   validateLLMOutput
 } from "../src/lib/openai-keyword-agent.mjs";
+
+test("keyword agent system prompt documents core judgement rules", () => {
+  for (const expected of [
+    "不要只看词尾",
+    "customerConfig.desiredIntent",
+    "invoice generator + B端展示站",
+    "gaming microphone manufacturer",
+    "401k calculator",
+    "tax calculator",
+    "stock",
+    "crypto",
+    "品牌词不自动排除",
+    "B端展示站",
+    "询盘/线索",
+    "firstJudgement=排除 时 rating 必须为空"
+  ]) {
+    assert.match(KEYWORD_AGENT_SYSTEM_PROMPT, new RegExp(expected.replace(/[()+]/g, "\\$&")));
+  }
+});
+
+test("keyword agent prompt payload documents prefiltered rows and semantic rules", () => {
+  const payload = buildPromptPayload([
+    {
+      rowNumber: 2,
+      keyword: "gaming microphone manufacturer",
+      keywordRecord: { "词根": "manufacturer", "关键词": "gaming microphone manufacturer" },
+      rule: {
+        "词根": "manufacturer",
+        "意图": "B端展示站",
+        "变现渠道1": "其他",
+        "能力1": "B端展示站"
+      }
+    }
+  ]);
+  const rulesText = JSON.stringify(payload.rules);
+
+  assert.match(rulesText, /Rows are already filtered|bing二次判断=继续/);
+  assert.match(rulesText, /Actual intent must match customerConfig\.desiredIntent|Do not hard-map desiredIntent/);
+  assert.match(rulesText, /401k calculator|financial education|education-only estimators/);
+  assert.match(rulesText, /B端展示站|RFQ|supplier/);
+  assert.equal(payload.rows[0].customerConfig.desiredIntent, "B端展示站");
+  assert.deepEqual(payload.rows[0].customerConfig.allowedMonetizationChannels, ["其他"]);
+});
 
 test("openai keyword agent writes rationale and status for excluded rows", () => {
   const result = normalizeDecision({

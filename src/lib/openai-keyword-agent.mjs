@@ -3,6 +3,79 @@ import { AGENT_STATUS_COLUMN } from "./keyword-agent-rules.mjs";
 const DEFAULT_MODEL = "gpt-5.4-mini";
 export { AGENT_STATUS_COLUMN };
 
+export const KEYWORD_AGENT_SYSTEM_PROMPT = `你是关键词产品机会判断 agent，不是流量筛选器。
+
+输入信任边界：
+这些 rows 已经通过前置流程：Semrush 词根拓展、机器粗筛、Bing Webmaster 3M展示门槛、Bing SERP top5 根域名竞争筛选。
+不要重新设置搜索量、KD、Bing展示、竞争度门槛。只做最后产品判断：真实意图、是否值得做站、技术难度、变现渠道、是否匹配客户能力。
+
+真实意图优先：
+不要只看词尾。generator/calculator/checker/converter 可能是在线工具，也可能是实体商品、品牌官方工具、购买词、服务词。
+必须判断用户是否真的想打开网页输入内容或参数并得到结果。
+
+动态客户意图：
+customerConfig.desiredIntent 是客户目标意图。输出 intent 只能是 customerConfig.desiredIntent 或 其他。
+不能硬贴 customerConfig.desiredIntent。必须先判断关键词真实意图：
+- 真实意图匹配客户目标：intent=customerConfig.desiredIntent，firstJudgement=继续
+- 真实意图不匹配：intent=其他，firstJudgement=排除
+例子：
+- invoice generator + 工具站 => 继续
+- invoice generator + B端展示站 => 排除
+- gaming microphone manufacturer + B端展示站 => 继续
+- memory chip distributor + 工具站 => 排除
+
+工具站定义：
+用户希望打开网页输入内容/参数并得到结果。
+例子：signature generator, mla citation generator, color contrast checker, invoice generator, 401k calculator, retirement calculator, random word generator。
+
+B端展示站定义：
+用户在找供应商、厂家、OEM/ODM、批发、企业服务、报价、RFQ、行业解决方案。
+例子：gaming microphone manufacturer, fpv drone supplier, memory chip distributor, custom pcb manufacturer, oem microphone factory, industrial camera supplier。
+
+硬排除：
+以下 firstJudgement=排除：成人/NSFW、赌博/博彩、破解/盗版/绕过付费、医疗诊断或药物剂量、法律/税务高风险、tax calculator、IRS、lawyer、lawsuit、stock、crypto、forex、trading、investment、option profit、day trading、单位换算如 cm to inches、货币换算如 usd to cny、简单数学如 percentage calculator、日期时间简单计算如 days between dates calculator、实体商品、购买、价格、manual、parts、repair、installation、本地服务、招聘、工资、职位类关键词。
+
+金融教育估算器例外：
+不要把 401k calculator、401(k) calculator、retirement calculator、mortgage calculator、loan calculator、compound interest calculator、savings calculator、debt payoff calculator 一刀切排除。
+这些可以继续，但必须只定位为教育估算器，不提供财务建议，并在 recommendation 或 rationale 中提示 YMYL / 教育估算 / 免责声明 / 避免财务建议。
+
+实体 generator 例子：
+honda generator、solar generator、portable generator、generac generator、whole house generator、inverter generator 是实体商品或购买意图，不是在线工具，必须排除。
+
+品牌词：
+品牌词不自动排除。但 recommendation 或 rationale 必须包含品牌/商标风险提示。
+例子：canva qr code generator, adobe qr code generator, chipotle nutrition calculator, desmos graphing calculator, lastpass password generator。
+
+技术难度：
+difficulty 必须是 轻：原因 / 中：原因 / 重：原因。
+轻：前端计算、模板生成、简单文本处理、简单文件转换；Cloudflare Pages / Workers / KV / D1 / R2 可实现；不需要登录或登录可选。
+中：需要少量数据源、模板库、导出、轻量账号或轻量状态；边缘部署可做但需要验证。
+重：GPU、AI 图片/视频/音乐生成、复杂爬虫、官方授权或版权数据、实时第三方数据、复杂账号体系/队列/状态、高风险专业判断。
+
+第二次判断：
+技术轻或中，且匹配 customerConfig.abilities，输出 推荐。技术重或明显不匹配能力，输出 不推荐。abilities 为空时，不要因为能力为空而拒绝。
+
+变现渠道：
+monetization 只能是 广告 / 轻saas / 其他。
+广告：一次性免费工具，高频搜索，用户付费意愿弱，适合 EMD + Bing + Adsense。
+轻saas：必须有订阅理由，如保存历史、批量处理、导出 PDF/CSV/图片、团队协作、API、高级模板、高级参数、职业工作流。
+其他：电商、联盟、线索、询盘、品牌截流、实体商品、无清晰广告/SaaS路径、灰色高风险方向。B端展示站通常是 其他，因为更适合询盘/线索/RFQ。
+
+第三次判断：
+如果 monetization 不在 customerConfig.allowedMonetizationChannels 中，thirdJudgement=不推荐。
+如果 monetization=其他，默认不推荐。但 B端展示站 + 客户允许 其他 + 有清晰询盘/线索路径时，可以推荐。
+
+评级：
+不要自由发挥。只按 secondJudgement=推荐 + thirdJudgement=推荐 => A；secondJudgement=不推荐 + thirdJudgement=不推荐 => C；其他 => B。
+firstJudgement=排除 时 rating 必须为空字符串。
+
+排除行：
+如果 firstJudgement=排除：intent=其他，difficulty=""，secondJudgement=""，monetization=""，thirdJudgement=""，recommendation=""，rating=""，rationale 写 20-80 字中文原因。
+
+输出风格：
+只返回 JSON Schema 要求的 JSON。不要输出 Markdown。recommendation 中文，50字以内。rationale 中文，80字以内。
+宁可保守，不要把实体商品词、错配意图词、灰色词、重技术词误判成 A。`;
+
 const VALID_MONETIZATION_CHANNELS = ["广告", "轻saas", "其他"];
 const VALID_JUDGEMENTS = ["推荐", "不推荐"];
 const VALID_RATINGS = ["A", "B", "C"];
@@ -189,36 +262,45 @@ function rowNumberFor(row, llmOutput) {
   return Number(llmOutput?.rowNumber || row?.rowNumber || row?.row?.rowNumber || 0);
 }
 
-function buildPromptPayload(items) {
+export function buildPromptPayload(items) {
   return {
     task: "Classify keyword opportunities for a keyword research spreadsheet.",
     rules: {
-      trafficAssumption: "Rows are already filtered to bing二次判断=继续. Treat Bing traffic and low exact-match-domain competition as already validated. Do not add extra KD/search-volume thresholds.",
-      firstJudgement: "intent must be either the customer desired intent or 其他. If intent is customer desired intent, firstJudgement=继续. If intent=其他, firstJudgement=排除.",
-      dynamicIntent: "Customer desired intent comes from 词根拓展.意图. Examples: 工具站 or B端展示站. Use that exact value when the keyword matches it.",
+      trafficAssumption: "Rows are already filtered to bing二次判断=继续 by Semrush expansion, machine prefilter, Bing Webmaster 3M impressions, and Bing SERP top5 root-domain competition. Do not add search volume, KD, Bing impressions, or competition thresholds.",
+      firstJudgement: "Actual intent must match customerConfig.desiredIntent. Do not hard-map desiredIntent onto the keyword. If actual intent matches desiredIntent, intent=desiredIntent and firstJudgement=继续. If it does not match, intent=其他 and firstJudgement=排除.",
+      dynamicIntent: "Customer desired intent comes from 词根拓展.意图 through customerConfig.desiredIntent. Output intent can only be customerConfig.desiredIntent or 其他. Examples: invoice generator + 工具站 => 继续; invoice generator + B端展示站 => 排除; gaming microphone manufacturer + B端展示站 => 继续; memory chip distributor + 工具站 => 排除.",
+      actualIntent: {
+        toolSite: "工具站 means the user wants to open a web page, input content/parameters, and get a result. Examples: signature generator, mla citation generator, color contrast checker, invoice generator, 401k calculator, retirement calculator, random word generator.",
+        b2bShowcase: "B端展示站 means supplier/manufacturer/OEM/ODM/wholesale/distributor/vendor/enterprise service/RFQ/quote/quotation/industrial solution intent. Examples: gaming microphone manufacturer, fpv drone supplier, memory chip distributor, custom pcb manufacturer, oem microphone factory, industrial camera supplier."
+      },
       exclude: [
         "adult/NSFW",
         "gambling/betting",
         "cracking/piracy/bypass paid products",
         "medical diagnosis or drug/dosage advice",
-        "legal/tax high-risk advice",
-        "financial/investment advice",
-        "simple unit conversion, currency conversion, percentage math, or date/time arithmetic that Google/AI answers directly",
-        "physical products, local services, installation, repair, jobs, salary, manuals, parts, prices, product-shopping terms"
+        "legal/tax high-risk advice including tax calculator, IRS, lawyer, lawsuit",
+        "financial investment/trading advice including stock, crypto, forex, trading, investment, option profit, day trading",
+        "simple unit conversion such as cm to inches, currency conversion such as usd to cny, percentage math such as percentage calculator, or date/time arithmetic such as days between dates calculator",
+        "physical products, purchase, price, manual, parts, repair, installation, local services, jobs, salary, position keywords"
+      ],
+      financialEducationException: [
+        "Do not hard-exclude 401k calculator, 401(k) calculator, retirement calculator, mortgage calculator, loan calculator, compound interest calculator, savings calculator, debt payoff calculator.",
+        "These may continue as education-only estimators, but recommendation/rationale must mention YMYL, education estimate, disclaimer, or avoiding financial advice."
       ],
       semanticWarnings: [
         "Do not classify by suffix alone. generator can mean an online content generator OR an electric generator product.",
-        "honda generator, solar generator, portable generator, generac generator, whole house generator are physical product terms, not online tool-site demand.",
+        "honda generator, solar generator, portable generator, generac generator, whole house generator, inverter generator are physical product or purchase terms, not online tool-site demand.",
         "Brand terms are not automatically excluded, but recommendation and rationale must mention brand/trademark risk."
       ],
-      difficulty: "Use format 轻：reason, 中：reason, or 重：reason. 推荐 only if light enough for Cloudflare edge/static/Workers/KV/D1/R2 and compatible with customer abilities. If abilities are empty, do not add ability constraints.",
-      monetization: "Choose exactly one of 广告, 轻saas, 其他. If best channel is not listed in customer's 变现渠道1/2, thirdJudgement=不推荐. If both ad and SaaS are plausible, choose the more defensible one.",
+      difficulty: "Use format 轻：reason, 中：reason, or 重：reason. 轻: frontend calculation/templates/simple text/file conversion and Cloudflare Pages/Workers/KV/D1/R2 feasible. 中: small datasets/templates/export/light account/light state, edge feasible but needs validation. 重: GPU, AI image/video/music, complex crawling, official authorization/copyright data, realtime third-party data, complex account/queue/state, high-risk professional judgement.",
+      secondJudgement: "Recommend when difficulty is 轻 or 中 and compatible with customerConfig.abilities. If abilities are empty, do not reject because abilities are empty. Do not recommend when difficulty is 重 or clearly outside abilities.",
+      monetization: "Choose exactly one of 广告, 轻saas, 其他. 广告 fits one-off free tools with weak willingness to pay and EMD+Bing+Adsense. 轻saas requires subscription reasons: saved history, batch processing, PDF/CSV/image export, team collaboration, API, advanced templates/parameters, professional workflow. 其他 covers ecommerce, affiliate, leads, inquiries, RFQ, brand interception, physical products, unclear ad/SaaS path, gray/high-risk directions. B端展示站 usually uses 其他 because it fits inquiry/lead/RFQ monetization.",
       saasSignals: "轻saas requires subscription reasons like saved history, batch processing, export PDF/CSV/image, team collaboration, API, advanced templates/parameters, or professional workflow.",
-      otherChannel: "If monetization=其他, thirdJudgement is 不推荐 unless there is a clear non-ad/non-SaaS path.",
-      excludedRows: "If firstJudgement=排除, set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale should be a short reason.",
+      thirdJudgement: "If monetization is not in customerConfig.allowedMonetizationChannels, thirdJudgement=不推荐. If monetization=其他, default 不推荐. Exception: B端展示站 + customer allows 其他 + clear inquiry/lead/RFQ path can be 推荐.",
+      excludedRows: "If firstJudgement=排除, set intent=其他 and set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale must be a 20-80 Chinese character reason.",
       recommendation: "If not excluded, recommendation must be <=50 Chinese characters and include brand risk when relevant.",
       rationale: "rationale must be <=80 Chinese characters.",
-      rating: "Only if not excluded: secondJudgement+thirdJudgement both 推荐 => A; both 不推荐 => C; otherwise B."
+      rating: "Do not improvise. Only if not excluded: secondJudgement=推荐 + thirdJudgement=推荐 => A; secondJudgement=不推荐 + thirdJudgement=不推荐 => C; otherwise B. If firstJudgement=排除, rating must be an empty string."
     },
     rows: items.map((item) => ({
       rowNumber: item.rowNumber,
@@ -398,7 +480,7 @@ export async function evaluateKeywordRowsWithOpenAI(items, {
       messages: [
         {
           role: "system",
-          content: "You are a precise SEO keyword opportunity analyst. Return only valid JSON matching the schema. Think semantically, not by keyword suffix."
+          content: KEYWORD_AGENT_SYSTEM_PROMPT
         },
         {
           role: "user",
