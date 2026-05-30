@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fileURLToPath } from "node:url";
 import { readArg, readFlag } from "./lib/args.mjs";
 import { loadDotEnv } from "./lib/env.mjs";
 import { writeJson } from "./lib/files.mjs";
@@ -9,6 +10,7 @@ import {
   valuesToTable
 } from "./lib/table-utils.mjs";
 import {
+  AGENT_STATUS_COLUMN,
   evaluateKeywordAgentRow,
   targetAgentColumns
 } from "./lib/keyword-agent-rules.mjs";
@@ -19,6 +21,12 @@ const KEYWORD_TOTAL_SHEET = "关键词总表";
 const DEFAULT_LIMIT = 20;
 
 loadDotEnv();
+
+export { AGENT_STATUS_COLUMN };
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function normalizeKey(value) {
   return String(value || "").trim().toLowerCase();
@@ -66,7 +74,7 @@ function optionalNormalizedHeaderIndex(headers, header) {
   return headers.findIndex((candidate) => String(candidate || "").trim() === expected);
 }
 
-function validateHeaders(headers) {
+export function validateHeaders(headers) {
   const required = [
     "词根",
     "关键词",
@@ -138,6 +146,29 @@ function hasBlankTargetColumn(headers, row) {
   });
 }
 
+export function shouldSkipKeywordAgentRow({ headers, row, force = false }) {
+  if (force) {
+    return { skip: false, reason: "" };
+  }
+
+  const statusIndex = optionalNormalizedHeaderIndex(headers, AGENT_STATUS_COLUMN);
+  if (statusIndex !== -1) {
+    const status = String(row.values[statusIndex] || "").trim();
+    if (status === "完成") {
+      return { skip: true, reason: "agent_status_done" };
+    }
+    if (status === "排除") {
+      return { skip: true, reason: "agent_status_excluded" };
+    }
+  }
+
+  if (!hasBlankTargetColumn(headers, row)) {
+    return { skip: true, reason: "target_columns_already_filled" };
+  }
+
+  return { skip: false, reason: "" };
+}
+
 async function readRequiredSheet(sheetUrl, range) {
   const result = await getSheetValues({ sheetUrl, range });
   if (!result.ok) {
@@ -148,11 +179,26 @@ async function readRequiredSheet(sheetUrl, range) {
 
 async function writeKeywordRow({ sheetUrl, headers, rowNumber, values }) {
   const lastColumn = columnName(headers.length - 1);
-  return updateSheetValues({
-    sheetUrl,
-    range: `${KEYWORD_TOTAL_SHEET}!A${rowNumber}:${lastColumn}${rowNumber}`,
-    values: [values.slice(0, headers.length)]
-  });
+  let lastResult;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    lastResult = await updateSheetValues({
+      sheetUrl,
+      range: `${KEYWORD_TOTAL_SHEET}!A${rowNumber}:${lastColumn}${rowNumber}`,
+      values: [values.slice(0, headers.length)]
+    });
+    if (lastResult.ok) {
+      return lastResult;
+    }
+    const reason = String(lastResult.reason || "");
+    const quotaLimited = lastResult.status === 429 || /quota|rate|too many/i.test(reason);
+    if (!quotaLimited || attempt >= 5) {
+      return lastResult;
+    }
+    const waitMs = 65000 + (attempt - 1) * 10000;
+    console.warn(`写入第 ${rowNumber} 行触发限流，等待 ${Math.round(waitMs / 1000)} 秒后重试 (${attempt}/5)`);
+    await sleep(waitMs);
+  }
+  return lastResult;
 }
 
 async function main() {
@@ -165,6 +211,7 @@ async function main() {
   const mode = readArg("mode", "llm");
   const model = readArg("model", process.env.OPENAI_MODEL || "");
   const out = readArg("out", "output/keyword-agent/last-run-summary.json");
+  const writeDelayMs = Number(readArg("write-delay-ms", "1200")) || 1200;
 
   const [taskTable, keywordTable] = await Promise.all([
     readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:S`),
@@ -190,12 +237,17 @@ async function main() {
       continue;
     }
 
-    if (!force && !hasBlankTargetColumn(keywordTable.headers, row)) {
+    const skip = shouldSkipKeywordAgentRow({
+      headers: keywordTable.headers,
+      row,
+      force
+    });
+    if (skip.skip) {
       summaries.push({
         row: row.rowNumber,
         keyword,
         status: "skipped",
-        reason: "target_columns_already_filled"
+        reason: skip.reason
       });
       continue;
     }
@@ -266,6 +318,9 @@ async function main() {
       modelRationale: evaluation.modelRationale,
       writeResult
     });
+    if (!dryRun && writeDelayMs > 0) {
+      await sleep(writeDelayMs);
+    }
   }
 
   const summary = {
@@ -277,6 +332,7 @@ async function main() {
       force,
       mode,
       model: mode === "rules" ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
+      writeDelayMs,
       limit,
       fromRow,
       toRow,
@@ -293,7 +349,9 @@ async function main() {
   console.log(`Wrote ${out}`);
 }
 
-main().catch((error) => {
-  console.error(error.message || String(error));
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((error) => {
+    console.error(error.message || String(error));
+    process.exit(1);
+  });
+}

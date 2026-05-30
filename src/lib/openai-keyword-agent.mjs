@@ -1,4 +1,7 @@
+import { AGENT_STATUS_COLUMN } from "./keyword-agent-rules.mjs";
+
 const DEFAULT_MODEL = "gpt-5.4-mini";
+export { AGENT_STATUS_COLUMN };
 
 const OUTPUT_SCHEMA = {
   name: "keyword_agent_batch_decision",
@@ -123,7 +126,7 @@ function buildPromptPayload(items) {
   };
 }
 
-function normalizeDecision(decision) {
+export function normalizeDecision(decision) {
   const firstJudgement = decision.firstJudgement === "继续" ? "继续" : "排除";
   const excluded = firstJudgement === "排除" || decision.intent === "其他";
   if (excluded) {
@@ -131,7 +134,9 @@ function normalizeDecision(decision) {
       rowNumber: Number(decision.rowNumber),
       values: {
         "意图": "其他",
-        "第一次判断": "排除"
+        "第一次判断": "排除",
+        "判断依据": String(decision.rationale || "").trim().slice(0, 80),
+        [AGENT_STATUS_COLUMN]: "排除"
       },
       modelRationale: String(decision.rationale || "").trim()
     };
@@ -148,7 +153,8 @@ function normalizeDecision(decision) {
       "第三次判断": decision.thirdJudgement === "推荐" ? "推荐" : "不推荐",
       "建议": String(decision.recommendation || "").trim().slice(0, 50),
       "判断依据": String(decision.rationale || "").trim().slice(0, 80),
-      "评级": ["A", "B", "C"].includes(decision.rating) ? decision.rating : "B"
+      "评级": ["A", "B", "C"].includes(decision.rating) ? decision.rating : "B",
+      [AGENT_STATUS_COLUMN]: "完成"
     },
     modelRationale: String(decision.rationale || "").trim()
   };

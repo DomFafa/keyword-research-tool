@@ -9,6 +9,7 @@ const TARGET_COLUMNS = [
   "判断依据",
   "评级"
 ];
+export const AGENT_STATUS_COLUMN = "agent状态";
 
 const TOOL_SUFFIXES = new Set([
   "calculator",
@@ -103,6 +104,16 @@ function hasAny(patterns, text) {
 function compactText(parts, limit = 50) {
   const text = parts.filter(Boolean).join("；");
   return text.length <= limit ? text : text.slice(0, limit - 1);
+}
+
+function exclusionRationale(keyword, reason) {
+  if (reason === "实体发电机/商品词") {
+    return "真实意图是实体发电机/商品词，不是在线工具需求";
+  }
+  if (String(reason || "").includes("可被AI直接满足")) {
+    return reason;
+  }
+  return compactText([reason || "不符合客户目标意图"], 80);
 }
 
 function parseChannels(rule) {
@@ -274,6 +285,8 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   };
 
   if (intentResult.stop) {
+    result["判断依据"] = exclusionRationale(keyword, intentResult.reason);
+    result[AGENT_STATUS_COLUMN] = "排除";
     return {
       values: result,
       stopAfterFirstJudgement: true,
@@ -308,6 +321,7 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
     brand ? "品牌词风险" : ""
   ], 80);
   result["评级"] = rating(secondJudgement, thirdJudgement);
+  result[AGENT_STATUS_COLUMN] = "完成";
 
   return {
     values: result,

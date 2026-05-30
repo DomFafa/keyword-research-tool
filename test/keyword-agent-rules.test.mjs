@@ -34,10 +34,10 @@ test("keyword agent stops after first judgement for AI-replaced simple utilities
   const result = evaluateKeywordAgentRow(row("percentage calculator"), toolRule);
 
   assert.equal(result.stopAfterFirstJudgement, true);
-  assert.deepEqual(result.values, {
-    "意图": "其他",
-    "第一次判断": "排除"
-  });
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.match(result.values["判断依据"], /可被AI直接满足/);
+  assert.equal(result.values["agent状态"], "排除");
 });
 
 test("keyword agent excludes adult and high-risk terms", () => {
@@ -49,18 +49,13 @@ test("keyword agent excludes adult and high-risk terms", () => {
 });
 
 test("keyword agent rejects physical generator product keywords", () => {
-  assert.deepEqual(evaluateKeywordAgentRow(row("honda generator"), toolRule).values, {
-    "意图": "其他",
-    "第一次判断": "排除"
-  });
-  assert.deepEqual(evaluateKeywordAgentRow(row("solar generator"), toolRule).values, {
-    "意图": "其他",
-    "第一次判断": "排除"
-  });
-  assert.deepEqual(evaluateKeywordAgentRow(row("portable generator"), toolRule).values, {
-    "意图": "其他",
-    "第一次判断": "排除"
-  });
+  for (const keyword of ["honda generator", "solar generator", "portable generator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
+    assert.equal(result.values["意图"], "其他");
+    assert.equal(result.values["第一次判断"], "排除");
+    assert.notEqual(result.values["判断依据"], "");
+    assert.equal(result.values["agent状态"], "排除");
+  }
 });
 
 test("keyword agent does not reject brand terms but warns in recommendation", () => {
@@ -69,6 +64,7 @@ test("keyword agent does not reject brand terms but warns in recommendation", ()
   assert.equal(result.values["第一次判断"], "继续");
   assert.match(result.values["建议"], /品牌/);
   assert.match(result.values["判断依据"], /品牌词风险/);
+  assert.equal(result.values["agent状态"], "完成");
 });
 
 test("keyword agent marks heavy AI tools as not matching light edge capability", () => {
