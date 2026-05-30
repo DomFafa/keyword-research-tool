@@ -45,6 +45,8 @@ honda generator、solar generator、portable generator、generac generator、who
 
 品牌词：
 品牌词不自动排除。但 recommendation 或 rationale 必须包含品牌/商标风险提示。
+只有关键词明确包含品牌信号时，才提示品牌/商标风险。不要把 generic tool keyword 误判成品牌词。
+signature generator、cursive generator、mla citation generator 不是品牌词，不要提示品牌风险。
 例子：canva qr code generator, adobe qr code generator, chipotle nutrition calculator, desmos graphing calculator, lastpass password generator。
 
 技术难度：
@@ -291,7 +293,8 @@ export function buildPromptPayload(items) {
       semanticWarnings: [
         "Do not classify by suffix alone. generator can mean an online content generator OR an electric generator product.",
         "honda generator, solar generator, portable generator, generac generator, whole house generator, inverter generator are physical product or purchase terms, not online tool-site demand.",
-        "Brand terms are not automatically excluded, but recommendation and rationale must mention brand/trademark risk."
+        "Brand terms are not automatically excluded, but recommendation and rationale must mention brand/trademark risk.",
+        "Only mention brand/trademark risk when the keyword explicitly contains a brand signal. Do not treat generic tool keywords as brand terms: signature generator, cursive generator, and mla citation generator are not brand keywords. Canva QR code generator, Adobe QR code generator, Chipotle nutrition calculator, Desmos graphing calculator, and LastPass password generator are brand keywords."
       ],
       difficulty: "Use format 轻：reason, 中：reason, or 重：reason. 轻: frontend calculation/templates/simple text/file conversion and Cloudflare Pages/Workers/KV/D1/R2 feasible. 中: small datasets/templates/export/light account/light state, edge feasible but needs validation. 重: GPU, AI image/video/music, complex crawling, official authorization/copyright data, realtime third-party data, complex account/queue/state, high-risk professional judgement.",
       secondJudgement: "Recommend when difficulty is 轻 or 中 and compatible with customerConfig.abilities. If abilities are empty, do not reject because abilities are empty. Do not recommend when difficulty is 重 or clearly outside abilities.",

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AGENT_STATUS_COLUMN,
+  assertOptionalHeaders,
+  buildHeaderDiagnostics,
   buildRuleIndex,
+  buildRowUpdate,
   collectKeywordAgentPendingRows,
   findRule,
   shouldSkipKeywordAgentRow,
@@ -89,6 +92,82 @@ test("keyword agent validates headers without optional agent status column", () 
     "判断依据",
     "评级"
   ]));
+});
+
+test("keyword agent row update reports ignored proposed agent status when header is missing", () => {
+  const result = buildRowUpdate(
+    ["关键词", "意图"],
+    row(["example keyword", ""]),
+    {
+      "意图": "工具站",
+      [AGENT_STATUS_COLUMN]: "完成"
+    }
+  );
+
+  assert.deepEqual(result.changed, ["意图"]);
+  assert.equal(result.proposedValues[AGENT_STATUS_COLUMN], "完成");
+  assert.equal(result.ignoredHeaders.includes(AGENT_STATUS_COLUMN), true);
+  assert.equal(Object.hasOwn(result.writableValues, AGENT_STATUS_COLUMN), false);
+  assert.deepEqual(result.writableValues, { "意图": "工具站" });
+});
+
+test("keyword agent row update writes proposed agent status when header exists", () => {
+  const result = buildRowUpdate(
+    ["关键词", "意图", AGENT_STATUS_COLUMN],
+    row(["example keyword", "", ""]),
+    {
+      "意图": "工具站",
+      [AGENT_STATUS_COLUMN]: "完成"
+    }
+  );
+
+  assert.equal(result.changed.includes(AGENT_STATUS_COLUMN), true);
+  assert.equal(result.ignoredHeaders.includes(AGENT_STATUS_COLUMN), false);
+  assert.equal(result.writableValues[AGENT_STATUS_COLUMN], "完成");
+});
+
+test("keyword agent row update reports blocked headers when force is false", () => {
+  const result = buildRowUpdate(
+    ["关键词", "意图", "第一次判断"],
+    row(["example keyword", "工具站", ""]),
+    {
+      "意图": "其他",
+      "第一次判断": "排除"
+    },
+    { force: false }
+  );
+
+  assert.deepEqual(result.changed, ["第一次判断"]);
+  assert.deepEqual(result.blockedHeaders, ["意图"]);
+  assert.equal(result.writableValues["第一次判断"], "排除");
+  assert.equal(Object.hasOwn(result.writableValues, "意图"), false);
+});
+
+test("keyword agent header diagnostics reports optional agent status presence", () => {
+  const withStatus = buildHeaderDiagnostics(keywordTableHeaders);
+  assert.equal(withStatus.agentStatusHeaderPresent, true);
+  assert.equal(withStatus.agentStatusHeaderIndex >= 0, true);
+  assert.equal(withStatus.optionalHeadersMissing.includes(AGENT_STATUS_COLUMN), false);
+
+  const withoutStatus = buildHeaderDiagnostics(keywordTableHeaders.filter((header) => header !== AGENT_STATUS_COLUMN));
+  assert.equal(withoutStatus.agentStatusHeaderPresent, false);
+  assert.equal(withoutStatus.agentStatusHeaderIndex, -1);
+  assert.equal(withoutStatus.optionalHeadersMissing.includes(AGENT_STATUS_COLUMN), true);
+});
+
+test("keyword agent optional header assertion can require agent status column", () => {
+  const headersWithoutStatus = keywordTableHeaders.filter((header) => header !== AGENT_STATUS_COLUMN);
+
+  assert.doesNotThrow(() => assertOptionalHeaders(headersWithoutStatus, {
+    requireAgentStatusColumn: false
+  }));
+  assert.throws(
+    () => assertOptionalHeaders(headersWithoutStatus, { requireAgentStatusColumn: true }),
+    /agent状态/
+  );
+  assert.doesNotThrow(() => assertOptionalHeaders(keywordTableHeaders, {
+    requireAgentStatusColumn: true
+  }));
 });
 
 test("keyword agent skips terminal rows when optional agent status exists", () => {

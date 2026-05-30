@@ -57,6 +57,10 @@ function researchSummaryFields(research) {
   };
 }
 
+function headerExists(headers, header) {
+  return optionalNormalizedHeaderIndex(headers, header) !== -1;
+}
+
 function compactList(values) {
   return values
     .map((value) => String(value || "").trim())
@@ -81,6 +85,30 @@ function summarizeRule(rule = {}) {
   };
 }
 
+export function buildHeaderDiagnostics(headers) {
+  const agentStatusHeaderIndex = optionalNormalizedHeaderIndex(headers, AGENT_STATUS_COLUMN);
+  const targetHeadersPresent = targetAgentColumns().filter((header) => headerExists(headers, header));
+  const targetHeadersMissing = targetAgentColumns().filter((header) => !headerExists(headers, header));
+  const optionalHeadersMissing = agentStatusHeaderIndex === -1 ? [AGENT_STATUS_COLUMN] : [];
+
+  return {
+    agentStatusHeaderPresent: agentStatusHeaderIndex !== -1,
+    agentStatusHeaderName: AGENT_STATUS_COLUMN,
+    agentStatusHeaderIndex,
+    targetHeadersPresent,
+    targetHeadersMissing,
+    optionalHeadersMissing
+  };
+}
+
+export function assertOptionalHeaders(headers, { requireAgentStatusColumn = false } = {}) {
+  if (requireAgentStatusColumn && !headerExists(headers, AGENT_STATUS_COLUMN)) {
+    throw new Error(
+      `关键词总表 缺少可选表头 ${AGENT_STATUS_COLUMN}。请先在 Sheet 中新增精确表头「${AGENT_STATUS_COLUMN}」，或移除 --require-agent-status-column。`
+    );
+  }
+}
+
 export function buildPlanOnlySummary({
   sheetUrl = "",
   taskSheet = TASK_SHEET,
@@ -99,6 +127,7 @@ export function buildPlanOnlySummary({
   selectedRows = [],
   pending = [],
   collectedSummaries = [],
+  headerDiagnostics = null,
   ranAt = new Date().toISOString()
 } = {}) {
   const plannedRows = pending.map((item) => {
@@ -152,6 +181,7 @@ export function buildPlanOnlySummary({
         maxResearchItems: researchMaxItems,
         failOpen: researchFailOpen
       },
+      headerDiagnostics,
       ranAt
     },
     selectedRows: countRows(selectedRows),
@@ -311,26 +341,42 @@ export function collectKeywordAgentPendingRows({
   };
 }
 
-function buildRowUpdate(headers, row, proposedValues, { force = false } = {}) {
+export function buildRowUpdate(headers, row, proposedValues, { force = false } = {}) {
   const values = [...row.values];
   while (values.length < headers.length) {
     values.push("");
   }
 
   const changed = [];
+  const ignoredHeaders = [];
+  const blockedHeaders = [];
+  const writableValues = {};
+  const proposedValueCopy = { ...proposedValues };
+  const proposedHeaders = Object.keys(proposedValueCopy);
   for (const [header, value] of Object.entries(proposedValues)) {
     const index = optionalNormalizedHeaderIndex(headers, header);
     if (index === -1) {
+      ignoredHeaders.push(header);
       continue;
     }
     if (!force && String(values[index] || "").trim()) {
+      blockedHeaders.push(header);
       continue;
     }
     values[index] = value;
     changed.push(header);
+    writableValues[header] = value;
   }
 
-  return { values, changed };
+  return {
+    values,
+    changed,
+    proposedHeaders,
+    ignoredHeaders,
+    blockedHeaders,
+    writableValues,
+    proposedValues: proposedValueCopy
+  };
 }
 
 function hasBlankTargetColumn(headers, row) {
@@ -402,6 +448,7 @@ async function main() {
   const limit = Number(readArg("limit", String(DEFAULT_LIMIT))) || DEFAULT_LIMIT;
   const dryRun = readFlag("dry-run");
   const planOnly = readFlag("plan-only") || readFlag("preflight");
+  const requireAgentStatusColumn = readFlag("require-agent-status-column");
   const force = readFlag("force");
   const mode = readArg("mode", "llm");
   const model = readArg("model", process.env.OPENAI_MODEL || "");
@@ -418,6 +465,8 @@ async function main() {
   ]);
 
   validateHeaders(keywordTable.headers);
+  assertOptionalHeaders(keywordTable.headers, { requireAgentStatusColumn });
+  const headerDiagnostics = buildHeaderDiagnostics(keywordTable.headers);
   const ruleIndex = buildRuleIndex(taskTable);
   const collected = collectKeywordAgentPendingRows({
     keywordTable,
@@ -452,7 +501,8 @@ async function main() {
       researchFailOpen,
       selectedRows,
       pending,
-      collectedSummaries: summaries
+      collectedSummaries: summaries,
+      headerDiagnostics
     });
     await writeJson(out, summary);
     console.log(`Plan-only ${summary.pendingRows}/${summary.selectedRows} pending row(s). Wrote ${out}`);
@@ -500,13 +550,17 @@ async function main() {
       });
       continue;
     }
-    const { values, changed } = buildRowUpdate(keywordTable.headers, row, evaluation.values, { force });
-    if (changed.length === 0) {
+    const update = buildRowUpdate(keywordTable.headers, row, evaluation.values, { force });
+    if (update.changed.length === 0) {
       summaries.push({
         row: row.rowNumber,
         keyword,
         status: "skipped",
-        reason: "target_columns_already_filled"
+        reason: "target_columns_already_filled",
+        proposedValues: update.proposedValues,
+        writableValues: update.writableValues,
+        ignoredHeaders: update.ignoredHeaders,
+        blockedHeaders: update.blockedHeaders
       });
       continue;
     }
@@ -517,7 +571,7 @@ async function main() {
         sheetUrl,
         headers: keywordTable.headers,
         rowNumber: row.rowNumber,
-        values
+        values: update.values
       });
       if (!writeResult.ok) {
         throw new Error(`写入第 ${row.rowNumber} 行失败: ${writeResult.reason || "unknown error"}`);
@@ -530,8 +584,12 @@ async function main() {
       status: dryRun ? "dry-run" : "updated",
       mode,
       model: resolvedModelName(mode, model),
-      changed,
-      values: Object.fromEntries(changed.map((header) => [header, values[normalizedHeaderIndex(keywordTable.headers, header)]])),
+      changed: update.changed,
+      values: update.writableValues,
+      proposedValues: update.proposedValues,
+      writableValues: update.writableValues,
+      ignoredHeaders: update.ignoredHeaders,
+      blockedHeaders: update.blockedHeaders,
       modelRationale: evaluation.modelRationale,
       warnings: evaluation.warnings || [],
       ...researchSummaryFields(item.research),
@@ -567,6 +625,7 @@ async function main() {
         failOpen: researchFailOpen,
         dryRunProviderSkipped: researchEnabled && dryRun && !researchIgnoredInRulesMode
       },
+      headerDiagnostics,
       ranAt: new Date().toISOString()
     },
     selectedRows: selectedRows.length,

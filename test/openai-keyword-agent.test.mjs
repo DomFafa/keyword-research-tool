@@ -19,6 +19,11 @@ test("keyword agent system prompt documents core judgement rules", () => {
     "stock",
     "crypto",
     "品牌词不自动排除",
+    "signature generator、cursive generator",
+    "canva qr code generator",
+    "adobe qr code generator",
+    "不要把 generic tool keyword 误判成品牌词",
+    "只有关键词明确包含品牌信号时，才提示品牌/商标风险",
     "B端展示站",
     "询盘/线索",
     "firstJudgement=排除 时 rating 必须为空"
@@ -47,6 +52,9 @@ test("keyword agent prompt payload documents prefiltered rows and semantic rules
   assert.match(rulesText, /Actual intent must match customerConfig\.desiredIntent|Do not hard-map desiredIntent/);
   assert.match(rulesText, /401k calculator|financial education|education-only estimators/);
   assert.match(rulesText, /B端展示站|RFQ|supplier/);
+  assert.match(rulesText, /Only mention brand\/trademark risk when the keyword explicitly contains a brand signal/);
+  assert.match(rulesText, /signature generator.*not brand keywords|signature generator.*brand/);
+  assert.match(rulesText, /Canva QR code generator|Adobe QR code generator/);
   assert.equal(payload.rows[0].customerConfig.desiredIntent, "B端展示站");
   assert.deepEqual(payload.rows[0].customerConfig.allowedMonetizationChannels, ["其他"]);
 });
