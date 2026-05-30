@@ -133,6 +133,30 @@
       "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["教育", "估算", "YMYL", "免责声明", "财务建议"] }
     },
     {
+      "name": "cd calculator is financial education estimator",
+      "keyword": "cd calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["金融教育", "估算", "YMYL", "免责声明", "财务建议"] }
+    },
+    {
+      "name": "roth ira calculator is financial education estimator",
+      "keyword": "roth ira calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["金融教育", "估算", "YMYL", "免责声明", "财务建议"] }
+    },
+    {
+      "name": "due date calculator is health education estimator",
+      "keyword": "due date calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["健康教育", "估算", "YMYL", "免责声明", "医疗建议"] }
+    },
+    {
+      "name": "pregnancy calculator is health education estimator",
+      "keyword": "pregnancy calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["健康教育", "估算", "YMYL", "免责声明", "医疗建议"] }
+    },
+    {
       "name": "tax calculator is tax risk",
       "keyword": "tax calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
@@ -159,6 +183,12 @@
     {
       "name": "option profit calculator is investment risk",
       "keyword": "option profit calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+    },
+    {
+      "name": "investment calculator is investment risk",
+      "keyword": "investment calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
       "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
     },

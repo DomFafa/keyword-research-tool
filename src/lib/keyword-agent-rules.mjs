@@ -80,7 +80,11 @@ const SAAS_SIGNAL_PATTERNS = [
 ];
 
 const FINANCIAL_EDUCATION_PATTERNS = [
-  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff)\s+calculator\b/
+  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira)\s+calculator\b/
+];
+
+const HEALTH_EDUCATION_PATTERNS = [
+  /\b(due\s+date|pregnancy|ovulation|conception|bmi|body\s*fat|calorie|tdee)\s+calculator\b/
 ];
 
 const B2B_SHOWCASE_PATTERNS = [
@@ -161,6 +165,22 @@ function detectFinancialEducationRisk(keyword) {
   };
 }
 
+function detectHealthEducationRisk(keyword) {
+  const text = normalize(keyword);
+  if (!hasAny(HEALTH_EDUCATION_PATTERNS, text)) {
+    return {
+      matched: false,
+      label: "",
+      rationale: ""
+    };
+  }
+  return {
+    matched: true,
+    label: "健康教育估算/YMYL",
+    rationale: "健康教育估算/YMYL，仅作教育用途，需免责声明避免医疗建议"
+  };
+}
+
 function isToolShapedKeyword(keyword) {
   const parts = tokens(keyword);
   const last = parts[parts.length - 1] || "";
@@ -204,14 +224,17 @@ function classifyIntent(keyword, rule) {
     };
   }
 
-  const aiReplaced = firstMatch(SIMPLE_AI_REPLACED_PATTERNS, text);
-  if (aiReplaced) {
-    return {
-      intent: "其他",
-      firstJudgement: "排除",
-      stop: true,
-      reason: `${aiReplaced.type}可被AI直接满足`
-    };
+  const healthRisk = detectHealthEducationRisk(keyword);
+  if (!healthRisk.matched) {
+    const aiReplaced = firstMatch(SIMPLE_AI_REPLACED_PATTERNS, text);
+    if (aiReplaced) {
+      return {
+        intent: "其他",
+        firstJudgement: "排除",
+        stop: true,
+        reason: `${aiReplaced.type}可被AI直接满足`
+      };
+    }
   }
 
   const actualIntent = detectActualIntent(keyword);
@@ -244,13 +267,25 @@ function classifyIntent(keyword, rule) {
   };
 }
 
-function technicalDifficulty(keyword, financialRisk = { matched: false }) {
+function technicalDifficulty(
+  keyword,
+  financialRisk = { matched: false },
+  healthRisk = { matched: false }
+) {
   if (financialRisk.matched) {
     return {
       level: "中",
       difficulty: "中：需谨慎设计假设和免责声明",
       recommended: true,
       reason: "纯前端估算器可做但需免责声明"
+    };
+  }
+  if (healthRisk.matched) {
+    return {
+      level: "中",
+      difficulty: "中：需谨慎设计假设和免责声明",
+      recommended: true,
+      reason: "纯前端健康估算器可做但需免责声明"
     };
   }
 
@@ -331,7 +366,7 @@ function rating(secondJudgement, thirdJudgement) {
   return "B";
 }
 
-function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, actualIntent }) {
+function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent }) {
   const parts = [];
   if (actualIntent === "B端展示站") {
     parts.push("做B端展示页，承接询盘线索");
@@ -347,6 +382,9 @@ function buildRecommendation({ keyword, difficulty, monetization, brand, financi
   }
   if (financialRisk?.matched) {
     parts.push("做教育估算器，强化免责声明");
+  }
+  if (healthRisk?.matched) {
+    parts.push("做健康教育估算，避免医疗建议");
   }
   if (brand) {
     parts.push("涉及品牌词需避开商标误导");
@@ -380,7 +418,8 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   const desiredIntent = targetIntent(rule);
   const actualIntent = intentResult.actualIntent || intentResult.intent;
   const financialRisk = detectFinancialEducationRisk(keyword);
-  const difficulty = technicalDifficulty(keyword, financialRisk);
+  const healthRisk = detectHealthEducationRisk(keyword);
+  const difficulty = technicalDifficulty(keyword, financialRisk, healthRisk);
   const secondRecommended = difficulty.recommended && abilityMatches(difficulty, rule);
   const secondJudgement = secondRecommended ? "推荐" : "不推荐";
   const monetization = chooseMonetization(keyword, { desiredIntent, actualIntent });
@@ -396,10 +435,11 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   result["第二次判断"] = secondJudgement;
   result["变现渠道"] = monetization.channel;
   result["第三次判断"] = thirdJudgement;
-  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, actualIntent });
+  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent });
   result["判断依据"] = compactText([
     intentResult.reason,
     financialRisk.matched ? financialRisk.rationale : "",
+    healthRisk.matched ? healthRisk.rationale : "",
     difficulty.reason,
     monetization.reason,
     channelAllowed ? "" : "不匹配客户变现渠道",

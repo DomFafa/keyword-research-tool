@@ -111,7 +111,14 @@ test("keyword agent excludes adult and high-risk terms", () => {
 });
 
 test("keyword agent keeps financial education calculators with risk warnings", () => {
-  for (const keyword of ["401k calculator", "retirement calculator", "mortgage calculator", "loan calculator"]) {
+  for (const keyword of [
+    "401k calculator",
+    "retirement calculator",
+    "mortgage calculator",
+    "loan calculator",
+    "cd calculator",
+    "roth ira calculator"
+  ]) {
     const result = evaluateKeywordAgentRow(row(keyword), {
       ...toolRule,
       "变现渠道1": "广告",
@@ -125,6 +132,17 @@ test("keyword agent keeps financial education calculators with risk warnings", (
   }
 });
 
+test("keyword agent keeps health education calculators with risk warnings", () => {
+  for (const keyword of ["due date calculator", "pregnancy calculator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
+
+    assert.equal(result.values["意图"], "工具站");
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.equal(result.values["agent状态"], "完成");
+    assert.match(`${result.values["判断依据"]} ${result.values["建议"]}`, /健康教育|YMYL|免责声明|医疗建议/);
+  }
+});
+
 test("keyword agent still excludes tax and investment calculators", () => {
   const tax = evaluateKeywordAgentRow(row("tax calculator"), toolRule);
   assert.equal(tax.values["意图"], "其他");
@@ -135,6 +153,10 @@ test("keyword agent still excludes tax and investment calculators", () => {
   const crypto = evaluateKeywordAgentRow(row("crypto calculator"), toolRule);
   assert.equal(crypto.values["第一次判断"], "排除");
   assert.match(crypto.values["判断依据"], /金融投资|高风险|投资建议/);
+
+  const investment = evaluateKeywordAgentRow(row("investment calculator"), toolRule);
+  assert.equal(investment.values["第一次判断"], "排除");
+  assert.match(investment.values["判断依据"], /金融投资|高风险|投资建议/);
 });
 
 test("keyword agent rejects physical generator product keywords", () => {

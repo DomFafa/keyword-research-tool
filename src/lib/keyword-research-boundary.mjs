@@ -75,6 +75,7 @@ const HARD_EXCLUDED_PATTERNS = [
   /\bcrypto\s+calculator\b/,
   /\bforex\s+trading\s+calculator\b/,
   /\boption\s+profit\s+calculator\b/,
+  /\binvestment\s+calculator\b/,
   /\bpercentage\s+calculator\b/,
   /\bcm\s+to\s+inches\b/,
   /\busd\s+to\s+cny\b/,
@@ -89,6 +90,10 @@ const FINANCIAL_EDUCATION_PATTERNS = [
   /\bloan\s+calculator\b/,
   /\bcompound\s+interest\s+calculator\b/,
   /\bsavings\s+calculator\b/,
+  /\bcd\s+calculator\b/,
+  /\bcertificate\s+of\s+deposit\s+calculator\b/,
+  /\broth\s+ira\s+calculator\b/,
+  /\bira\s+calculator\b/,
   /\bdebt\s+payoff\s+calculator\b/
 ];
 
@@ -118,10 +123,43 @@ function hasAny(patterns, text) {
   return patterns.some((pattern) => pattern.test(text));
 }
 
-function ruleAllowsSaas(rule) {
-  const channels = [rule?.["变现渠道1"], rule?.["变现渠道2"]]
-    .map((value) => String(value || "").trim().toLowerCase());
-  return channels.includes("轻saas") || channels.includes("轻SaaS".toLowerCase());
+function normalizedChannels(rule) {
+  return [rule?.["变现渠道1"], rule?.["变现渠道2"]]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((value) => value === "轻SaaS".toLowerCase() ? "轻saas" : value);
+}
+
+function hasExplicitSaasRequirement({ keyword, rule, keywordRecord }) {
+  const text = [
+    keyword,
+    keywordRecord?.["关键词"],
+    keywordRecord?.["变现渠道"],
+    keywordRecord?.["客户意图"],
+    keywordRecord?.["判断依据"],
+    rule?.["意图"],
+    rule?.["备注"]
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /\bsaas\b|轻saas|订阅|subscription|必须.*saas|只.*saas/.test(text);
+}
+
+function shouldCheckSaasUncertainty({ keyword, rule, keywordRecord }) {
+  const channels = normalizedChannels(rule);
+  const allowsSaas = channels.includes("轻saas");
+  if (!allowsSaas) {
+    return false;
+  }
+
+  const allowsAds = channels.includes("广告");
+  if (!allowsAds) {
+    return true;
+  }
+
+  return hasExplicitSaasRequirement({ keyword, rule, keywordRecord });
 }
 
 function levelForReasons(reasons) {
@@ -167,7 +205,7 @@ export function detectResearchNeeds({ keyword, rule = {}, keywordRecord = {} } =
   if (technicalUncertainty) {
     reasons.push("technical_uncertainty");
   }
-  if (ruleAllowsSaas(rule) && !hasAny(SAAS_SIGNAL_PATTERNS, text)) {
+  if (shouldCheckSaasUncertainty({ keyword: text, rule, keywordRecord }) && !hasAny(SAAS_SIGNAL_PATTERNS, text)) {
     reasons.push("saas_uncertainty");
   }
   if (hasAny(AI_ANSWER_UNCERTAINTY_PATTERNS, text)) {

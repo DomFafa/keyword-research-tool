@@ -60,6 +60,15 @@ test("detectResearchNeeds ignores financial education estimators", () => {
   assert.equal(result.needed, false);
 });
 
+test("detectResearchNeeds ignores additional financial education estimators", () => {
+  for (const keyword of ["cd calculator", "certificate of deposit calculator", "roth ira calculator", "ira calculator"]) {
+    const result = detectResearchNeeds({ keyword });
+
+    assert.equal(result.needed, false, keyword);
+    assert.equal(result.level, "none", keyword);
+  }
+});
+
 test("detectResearchNeeds ignores punctuated 401k financial education estimators", () => {
   const result = detectResearchNeeds({ keyword: "401(k) calculator" });
 
@@ -71,6 +80,50 @@ test("detectResearchNeeds ignores savings calculator financial education estimat
   const result = detectResearchNeeds({ keyword: "savings calculator" });
 
   assert.equal(result.needed, false);
+});
+
+test("detectResearchNeeds does not over-trigger saas uncertainty when ads are allowed", () => {
+  const rule = {
+    "意图": "工具站",
+    "变现渠道1": "广告",
+    "变现渠道2": "轻saas",
+    "能力1": "Cloudflare边缘部署",
+    "能力2": "轻工具站"
+  };
+
+  for (const keyword of [
+    "concrete calculator",
+    "fraction calculator",
+    "love calculator",
+    "pregnancy calculator",
+    "final grade calculator"
+  ]) {
+    const result = detectResearchNeeds({ keyword, rule });
+
+    assert.equal(result.reasons.includes("saas_uncertainty"), false, keyword);
+    assert.equal(result.needed, false, keyword);
+  }
+});
+
+test("detectResearchNeeds still flags saas uncertainty when only saas is allowed", () => {
+  const result = detectResearchNeeds({
+    keyword: "concrete calculator",
+    rule: {
+      "意图": "工具站",
+      "变现渠道1": "轻saas",
+      "变现渠道2": ""
+    }
+  });
+
+  assert.equal(result.needed, true);
+  assert.equal(result.reasons.includes("saas_uncertainty"), true);
+});
+
+test("detectResearchNeeds ignores known investment exclusions", () => {
+  const result = detectResearchNeeds({ keyword: "investment calculator" });
+
+  assert.equal(result.needed, false);
+  assert.equal(result.level, "none");
 });
 
 test("detectResearchNeeds ignores clear B2B showcase keywords", () => {
