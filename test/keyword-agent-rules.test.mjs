@@ -18,16 +18,78 @@ function row(keyword) {
   };
 }
 
-test("keyword agent keeps dynamic customer intent from task rule", () => {
+test("keyword agent keeps tool keywords when customer intent is tool site", () => {
+  const result = evaluateKeywordAgentRow(row("invoice generator"), toolRule);
+
+  assert.equal(result.values["意图"], "工具站");
+  assert.equal(result.values["第一次判断"], "继续");
+});
+
+test("keyword agent rejects tool keywords when customer intent is B2B showcase", () => {
   const result = evaluateKeywordAgentRow(row("invoice generator"), {
     ...toolRule,
     "意图": "B端展示站"
   });
 
-  assert.equal(result.values["意图"], "B端展示站");
-  assert.equal(result.values["第一次判断"], "继续");
-  assert.equal(result.values["变现渠道"], "轻saas");
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.match(result.values["判断依据"], /工具站|不匹配客户目标B端展示站/);
+  assert.equal(result.values["agent状态"], "排除");
+});
+
+test("keyword agent keeps B2B supplier keywords for B2B showcase intent", () => {
+  for (const keyword of ["gaming microphone manufacturer", "fpv drone supplier"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), {
+      ...toolRule,
+      "意图": "B端展示站",
+      "变现渠道1": "其他",
+      "变现渠道2": "",
+      "能力1": "B端展示站",
+      "能力2": "询盘页"
+    });
+
+    assert.equal(result.values["意图"], "B端展示站");
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.match(`${result.values["判断依据"]} ${result.values["建议"]}`, /B端|供应商|询盘|线索|企业采购|RFQ/);
+    assert.equal(result.values["agent状态"], "完成");
+  }
+});
+
+test("keyword agent rejects B2B supplier keywords for tool site intent", () => {
+  const result = evaluateKeywordAgentRow(row("memory chip distributor"), toolRule);
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.match(result.values["判断依据"], /B端展示站|供应商|不匹配客户目标工具站/);
+});
+
+test("keyword agent can recommend B2B showcase monetization when other channel is allowed", () => {
+  const result = evaluateKeywordAgentRow(row("gaming microphone manufacturer"), {
+    "意图": "B端展示站",
+    "变现渠道1": "其他",
+    "变现渠道2": "",
+    "能力1": "B端展示站",
+    "能力2": "询盘页"
+  });
+
+  assert.equal(result.values["变现渠道"], "其他");
+  assert.equal(result.values["第二次判断"], "推荐");
+  assert.equal(result.values["第三次判断"], "推荐");
   assert.equal(result.values["评级"], "A");
+});
+
+test("keyword agent rejects B2B showcase monetization when other channel is not allowed", () => {
+  const result = evaluateKeywordAgentRow(row("gaming microphone manufacturer"), {
+    "意图": "B端展示站",
+    "变现渠道1": "广告",
+    "变现渠道2": "",
+    "能力1": "B端展示站",
+    "能力2": ""
+  });
+
+  assert.equal(result.values["变现渠道"], "其他");
+  assert.equal(result.values["第三次判断"], "不推荐");
+  assert.match(result.values["判断依据"], /不匹配客户变现渠道|询盘|线索变现不匹配/);
 });
 
 test("keyword agent stops after first judgement for AI-replaced simple utilities", () => {

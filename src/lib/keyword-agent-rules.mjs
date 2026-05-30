@@ -83,6 +83,10 @@ const FINANCIAL_EDUCATION_PATTERNS = [
   /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff)\s+calculator\b/
 ];
 
+const B2B_SHOWCASE_PATTERNS = [
+  /\b(manufacturers?|suppliers?|factor(?:y|ies)|wholesale|distributors?|vendors?|oem|odm|private\s+label|custom\s+manufacturers?|bulk|industrial|enterprise|solutions?|service\s+providers?|compan(?:y|ies)|rfq|quotes?|quotation)\b/
+];
+
 function normalize(value) {
   return String(value || "")
     .toLowerCase()
@@ -157,6 +161,36 @@ function detectFinancialEducationRisk(keyword) {
   };
 }
 
+function isToolShapedKeyword(keyword) {
+  const parts = tokens(keyword);
+  const last = parts[parts.length - 1] || "";
+  return (
+    TOOL_SUFFIXES.has(last) ||
+    DOMAIN_SUFFIXES.has(last) ||
+    parts.some((part) => TOOL_SUFFIXES.has(part))
+  );
+}
+
+function detectActualIntent(keyword) {
+  const text = normalize(keyword);
+  if (isToolShapedKeyword(keyword)) {
+    return {
+      intent: "工具站",
+      reason: "明确在线工具/计算器需求"
+    };
+  }
+  if (hasAny(B2B_SHOWCASE_PATTERNS, text)) {
+    return {
+      intent: "B端展示站",
+      reason: "供应商/OEM/批发/企业采购意图"
+    };
+  }
+  return {
+    intent: "其他",
+    reason: "不符合工具站或B端展示站需求"
+  };
+}
+
 function classifyIntent(keyword, rule) {
   const text = normalize(keyword);
   const desiredIntent = targetIntent(rule);
@@ -180,19 +214,24 @@ function classifyIntent(keyword, rule) {
     };
   }
 
-  const parts = tokens(keyword);
-  const last = parts[parts.length - 1] || "";
-  const isToolShaped =
-    TOOL_SUFFIXES.has(last) ||
-    DOMAIN_SUFFIXES.has(last) ||
-    parts.some((part) => TOOL_SUFFIXES.has(part));
-
-  if (!isToolShaped) {
+  const actualIntent = detectActualIntent(keyword);
+  if (actualIntent.intent === "其他") {
     return {
       intent: "其他",
       firstJudgement: "排除",
       stop: true,
-      reason: "不是明确工具/站点需求"
+      reason: actualIntent.reason || "不符合客户目标意图",
+      actualIntent: actualIntent.intent
+    };
+  }
+
+  if (actualIntent.intent !== desiredIntent) {
+    return {
+      intent: "其他",
+      firstJudgement: "排除",
+      stop: true,
+      reason: `真实意图是${actualIntent.intent}，不匹配客户目标${desiredIntent}`,
+      actualIntent: actualIntent.intent
     };
   }
 
@@ -200,7 +239,8 @@ function classifyIntent(keyword, rule) {
     intent: desiredIntent,
     firstJudgement: "继续",
     stop: false,
-    reason: `匹配${desiredIntent}需求`
+    reason: actualIntent.reason || `匹配${desiredIntent}需求`,
+    actualIntent: actualIntent.intent
   };
 }
 
@@ -248,13 +288,20 @@ function abilityMatches(difficulty, rule) {
   if (difficulty.level === "重") {
     return false;
   }
-  if (/轻|tool|工具|saas|workers|cf|边缘|批量/.test(text)) {
+  if (/轻|tool|工具|saas|workers|cf|边缘|批量|b端|展示|询盘|线索|供应商|b2b|enterprise/.test(text)) {
     return true;
   }
   return difficulty.level === "轻";
 }
 
-function chooseMonetization(keyword) {
+function chooseMonetization(keyword, { desiredIntent = "工具站", actualIntent = "" } = {}) {
+  if (desiredIntent === "B端展示站" || actualIntent === "B端展示站") {
+    return {
+      channel: "其他",
+      reason: "B端展示站更适合询盘/线索变现"
+    };
+  }
+
   const text = normalize(keyword);
   if (hasAny(SAAS_SIGNAL_PATTERNS, text)) {
     return {
@@ -284,9 +331,11 @@ function rating(secondJudgement, thirdJudgement) {
   return "B";
 }
 
-function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk }) {
+function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, actualIntent }) {
   const parts = [];
-  if (monetization.channel === "轻saas") {
+  if (actualIntent === "B端展示站") {
+    parts.push("做B端展示页，承接询盘线索");
+  } else if (monetization.channel === "轻saas") {
     parts.push("做免费入口+保存/批量/导出付费");
   } else if (monetization.channel === "广告") {
     parts.push("做免费轻工具页承接Bing流量");
@@ -328,15 +377,17 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
 
   const text = normalize(keyword);
   const brand = isBrandKeyword(text);
+  const desiredIntent = targetIntent(rule);
+  const actualIntent = intentResult.actualIntent || intentResult.intent;
   const financialRisk = detectFinancialEducationRisk(keyword);
   const difficulty = technicalDifficulty(keyword, financialRisk);
   const secondRecommended = difficulty.recommended && abilityMatches(difficulty, rule);
   const secondJudgement = secondRecommended ? "推荐" : "不推荐";
-  const monetization = chooseMonetization(keyword);
+  const monetization = chooseMonetization(keyword, { desiredIntent, actualIntent });
   const channels = parseChannels(rule);
   const channelAllowed = channels.length === 0 || channels.includes(monetization.channel);
   const thirdRecommended =
-    monetization.channel !== "其他" &&
+    (monetization.channel !== "其他" || (desiredIntent === "B端展示站" && actualIntent === "B端展示站")) &&
     channelAllowed &&
     secondJudgement === "推荐";
   const thirdJudgement = thirdRecommended ? "推荐" : "不推荐";
@@ -345,7 +396,7 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   result["第二次判断"] = secondJudgement;
   result["变现渠道"] = monetization.channel;
   result["第三次判断"] = thirdJudgement;
-  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk });
+  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, actualIntent });
   result["判断依据"] = compactText([
     intentResult.reason,
     financialRisk.matched ? financialRisk.rationale : "",
