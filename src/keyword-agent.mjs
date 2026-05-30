@@ -103,10 +103,19 @@ export function validateHeaders(headers) {
   }
 }
 
-function selectRows(keywordTable, { fromRow, toRow, limit }) {
+export function collectKeywordAgentPendingRows({
+  keywordTable,
+  ruleIndex,
+  fromRow = 0,
+  toRow = 0,
+  limit = DEFAULT_LIMIT,
+  force = false
+}) {
   const bingSecondIndex = normalizedHeaderIndex(keywordTable.headers, "bing二次判断");
   const keywordIndex = normalizedHeaderIndex(keywordTable.headers, "关键词");
-  const selected = [];
+  const selectedRows = [];
+  const pending = [];
+  const summaries = [];
 
   for (const row of keywordTable.rows) {
     if (fromRow && row.rowNumber < fromRow) {
@@ -123,13 +132,51 @@ function selectRows(keywordTable, { fromRow, toRow, limit }) {
     if (bingSecond !== "继续") {
       continue;
     }
-    selected.push(row);
-    if (limit && selected.length >= limit) {
+    selectedRows.push(row);
+
+    const skip = shouldSkipKeywordAgentRow({
+      headers: keywordTable.headers,
+      row,
+      force
+    });
+    if (skip.skip) {
+      summaries.push({
+        row: row.rowNumber,
+        keyword,
+        status: "skipped",
+        reason: skip.reason
+      });
+      continue;
+    }
+
+    const rule = findRule(row, ruleIndex);
+    if (!rule) {
+      summaries.push({
+        row: row.rowNumber,
+        keyword,
+        status: "skipped",
+        reason: "missing_rule"
+      });
+      continue;
+    }
+
+    pending.push({
+      row,
+      rowNumber: row.rowNumber,
+      keyword,
+      rule,
+      keywordRecord: row.record
+    });
+    if (limit && pending.length >= limit) {
       break;
     }
   }
 
-  return selected;
+  return {
+    selectedRows,
+    pending,
+    summaries
+  };
 }
 
 function buildRowUpdate(headers, row, proposedValues, { force = false } = {}) {
@@ -235,46 +282,17 @@ async function main() {
 
   validateHeaders(keywordTable.headers);
   const ruleIndex = buildRuleIndex(taskTable);
-  const selectedRows = selectRows(keywordTable, { fromRow, toRow, limit });
-  const summaries = [];
-  const pending = [];
-
-  for (const row of selectedRows) {
-    const keyword = String(row.record["关键词"] || "").trim();
-    const rule = findRule(row, ruleIndex);
-    if (!rule) {
-      summaries.push({
-        row: row.rowNumber,
-        keyword,
-        status: "skipped",
-        reason: "missing_rule"
-      });
-      continue;
-    }
-
-    const skip = shouldSkipKeywordAgentRow({
-      headers: keywordTable.headers,
-      row,
-      force
-    });
-    if (skip.skip) {
-      summaries.push({
-        row: row.rowNumber,
-        keyword,
-        status: "skipped",
-        reason: skip.reason
-      });
-      continue;
-    }
-
-    pending.push({
-      row,
-      rowNumber: row.rowNumber,
-      keyword,
-      rule,
-      keywordRecord: row.record
-    });
-  }
+  const collected = collectKeywordAgentPendingRows({
+    keywordTable,
+    ruleIndex,
+    fromRow,
+    toRow,
+    limit,
+    force
+  });
+  const selectedRows = collected.selectedRows;
+  const pending = collected.pending;
+  const summaries = [...collected.summaries];
 
   const evaluations = mode === "rules"
     ? pending.map((item) => ({

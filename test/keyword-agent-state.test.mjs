@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AGENT_STATUS_COLUMN,
   buildRuleIndex,
+  collectKeywordAgentPendingRows,
   findRule,
   shouldSkipKeywordAgentRow,
   validateHeaders
@@ -18,6 +19,59 @@ function taskRow(rowNumber, record) {
 
 function keywordRow(rowNumber, record) {
   return { rowNumber, record, values: [] };
+}
+
+const keywordTableHeaders = [
+  "词根",
+  "关键词",
+  "bing二次判断",
+  "意图",
+  "第一次判断",
+  "难度",
+  "第二次判断",
+  "变现渠道",
+  "第三次判断",
+  "建议",
+  "判断依据",
+  "评级",
+  AGENT_STATUS_COLUMN
+];
+
+function keywordTableRow(rowNumber, {
+  root = "generator",
+  keyword = `keyword ${rowNumber}`,
+  bingSecond = "继续",
+  intent = "",
+  firstJudgement = "",
+  difficulty = "",
+  secondJudgement = "",
+  monetization = "",
+  thirdJudgement = "",
+  recommendation = "",
+  rationale = "",
+  rating = "",
+  agentStatus = ""
+} = {}) {
+  const values = [
+    root,
+    keyword,
+    bingSecond,
+    intent,
+    firstJudgement,
+    difficulty,
+    secondJudgement,
+    monetization,
+    thirdJudgement,
+    recommendation,
+    rationale,
+    rating,
+    agentStatus
+  ];
+  return {
+    rowNumber,
+    values,
+    record: Object.fromEntries(keywordTableHeaders.map((header, index) => [header, values[index] || ""]))
+  };
 }
 
 test("keyword agent validates headers without optional agent status column", () => {
@@ -135,4 +189,122 @@ test("keyword agent returns null when no rule matches", () => {
   });
 
   assert.equal(findRule(keywordRow(12, { "词根": "generator", "关键词": "signature generator" }), index), null);
+});
+
+test("keyword agent pending limit is not consumed by completed rows", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [taskRow(3, { "词根": "generator", "意图": "工具站" })]
+  });
+  const completedRows = Array.from({ length: 20 }, (_, index) =>
+    keywordTableRow(index + 2, {
+      keyword: `completed ${index + 1}`,
+      intent: "工具站",
+      firstJudgement: "继续",
+      difficulty: "轻：已完成",
+      secondJudgement: "推荐",
+      monetization: "广告",
+      thirdJudgement: "推荐",
+      recommendation: "done",
+      rationale: "done",
+      rating: "A",
+      agentStatus: "完成"
+    })
+  );
+  const pendingRow = keywordTableRow(22, { keyword: "actual pending generator" });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: { headers: keywordTableHeaders, rows: [...completedRows, pendingRow] },
+    ruleIndex,
+    limit: 1,
+    force: false
+  });
+
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.pending[0].keyword, "actual pending generator");
+  assert.equal(result.summaries.some((summary) => summary.reason === "agent_status_done"), true);
+});
+
+test("keyword agent skips terminal rows before duplicate rule lookup", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [
+      taskRow(3, { "词根": "generator", "意图": "工具站" }),
+      taskRow(8, { "词根": "generator", "意图": "B端展示站" })
+    ]
+  });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: {
+      headers: keywordTableHeaders,
+      rows: [keywordTableRow(12, { keyword: "completed generator", agentStatus: "完成" })]
+    },
+    ruleIndex,
+    limit: 1,
+    force: false
+  });
+
+  assert.equal(result.pending.length, 0);
+  assert.equal(result.summaries[0].reason, "agent_status_done");
+});
+
+test("keyword agent force ignores terminal state and enters pending", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [taskRow(3, { "词根": "generator", "意图": "工具站" })]
+  });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: {
+      headers: keywordTableHeaders,
+      rows: [keywordTableRow(12, { keyword: "completed generator", agentStatus: "完成" })]
+    },
+    ruleIndex,
+    limit: 1,
+    force: true
+  });
+
+  assert.equal(result.pending.length, 1);
+});
+
+test("keyword agent force still fails fast on duplicate rules", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [
+      taskRow(3, { "词根": "generator", "意图": "工具站" }),
+      taskRow(8, { "词根": "generator", "意图": "B端展示站" })
+    ]
+  });
+
+  assert.throws(
+    () => collectKeywordAgentPendingRows({
+      keywordTable: {
+        headers: keywordTableHeaders,
+        rows: [keywordTableRow(12, { keyword: "completed generator", agentStatus: "完成" })]
+      },
+      ruleIndex,
+      limit: 1,
+      force: true
+    }),
+    /规则不唯一/
+  );
+});
+
+test("keyword agent missing rules do not consume pending limit", () => {
+  const ruleIndex = buildRuleIndex({
+    rows: [taskRow(3, { "词根": "calculator", "意图": "工具站" })]
+  });
+
+  const result = collectKeywordAgentPendingRows({
+    keywordTable: {
+      headers: keywordTableHeaders,
+      rows: [
+        keywordTableRow(12, { root: "generator", keyword: "missing rule generator" }),
+        keywordTableRow(13, { root: "calculator", keyword: "age calculator" })
+      ]
+    },
+    ruleIndex,
+    limit: 1,
+    force: false
+  });
+
+  assert.equal(result.summaries.some((summary) => summary.reason === "missing_rule"), true);
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.pending[0].keyword, "age calculator");
 });
