@@ -51,6 +51,39 @@ test("keyword agent prompt payload documents prefiltered rows and semantic rules
   assert.deepEqual(payload.rows[0].customerConfig.allowedMonetizationChannels, ["其他"]);
 });
 
+test("keyword agent prompt payload includes optional research context", () => {
+  const payload = buildPromptPayload([
+    {
+      rowNumber: 2,
+      keyword: "canva qr code generator",
+      keywordRecord: { "词根": "generator", "关键词": "canva qr code generator" },
+      rule: {
+        "词根": "generator",
+        "意图": "工具站",
+        "变现渠道1": "广告"
+      },
+      research: {
+        needed: true,
+        reasons: ["brand_boundary"],
+        confidence: "high",
+        summary: "Official Canva tool dominates the SERP; brand risk is high.",
+        findings: [
+          {
+            title: "Canva QR Code Generator",
+            url: "https://www.canva.com/",
+            snippet: "Official Canva tool"
+          }
+        ]
+      }
+    }
+  ]);
+  const rulesText = JSON.stringify(payload.rules);
+
+  assert.equal(payload.rows[0].research.needed, true);
+  assert.equal(payload.rows[0].research.topFindings.length, 1);
+  assert.match(rulesText, /read-only auxiliary context|do not invent external facts|official brand-tool/);
+});
+
 test("openai keyword agent writes rationale and status for excluded rows", () => {
   const result = normalizeDecision({
     rowNumber: 21,

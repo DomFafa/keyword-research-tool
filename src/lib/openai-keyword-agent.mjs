@@ -1,4 +1,5 @@
 import { AGENT_STATUS_COLUMN } from "./keyword-agent-rules.mjs";
+import { summarizeResearchForPrompt } from "./keyword-agent-research.mjs";
 
 const DEFAULT_MODEL = "gpt-5.4-mini";
 export { AGENT_STATUS_COLUMN };
@@ -297,6 +298,7 @@ export function buildPromptPayload(items) {
       monetization: "Choose exactly one of 广告, 轻saas, 其他. 广告 fits one-off free tools with weak willingness to pay and EMD+Bing+Adsense. 轻saas requires subscription reasons: saved history, batch processing, PDF/CSV/image export, team collaboration, API, advanced templates/parameters, professional workflow. 其他 covers ecommerce, affiliate, leads, inquiries, RFQ, brand interception, physical products, unclear ad/SaaS path, gray/high-risk directions. B端展示站 usually uses 其他 because it fits inquiry/lead/RFQ monetization.",
       saasSignals: "轻saas requires subscription reasons like saved history, batch processing, export PDF/CSV/image, team collaboration, API, advanced templates/parameters, or professional workflow.",
       thirdJudgement: "If monetization is not in customerConfig.allowedMonetizationChannels, thirdJudgement=不推荐. If monetization=其他, default 不推荐. Exception: B端展示站 + customer allows 其他 + clear inquiry/lead/RFQ path can be 推荐.",
+      research: "research is read-only auxiliary context, not the final answer. If research shows official brand-tool dominance, mention brand/trademark risk. If research shows SERP is mostly physical products or purchase intent, exclude the row. If research is missing or skipped, do not invent external facts. Do not cite sources that are not present in research. Final output must still follow the JSON Schema and validator rules.",
       excludedRows: "If firstJudgement=排除, set intent=其他 and set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale must be a 20-80 Chinese character reason.",
       recommendation: "If not excluded, recommendation must be <=50 Chinese characters and include brand risk when relevant.",
       rationale: "rationale must be <=80 Chinese characters.",
@@ -326,7 +328,8 @@ export function buildPromptPayload(items) {
         abilities: abilitiesFromRule(item.rule),
         root: item.rule?.["词根"] || "",
         rowIntent: item.rule?.["意图"] || ""
-      }
+      },
+      research: item.research ? summarizeResearchForPrompt(item.research) : { needed: false, reasons: [], confidence: "none", summary: "", topFindings: [] }
     }))
   };
 }

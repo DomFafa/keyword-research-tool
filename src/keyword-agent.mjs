@@ -14,6 +14,11 @@ import {
   evaluateKeywordAgentRow,
   targetAgentColumns
 } from "./lib/keyword-agent-rules.mjs";
+import { enrichItemsWithResearch } from "./lib/keyword-agent-research.mjs";
+import {
+  createHttpResearchProvider,
+  createNoopResearchProvider
+} from "./lib/keyword-research-provider.mjs";
 import { evaluateKeywordRowsWithOpenAI } from "./lib/openai-keyword-agent.mjs";
 
 const TASK_SHEET = "词根拓展";
@@ -30,6 +35,25 @@ function sleep(ms) {
 
 function normalizeKey(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isRulesMode(mode) {
+  return mode === "rules";
+}
+
+function researchSummaryFields(research) {
+  if (!research) {
+    return {};
+  }
+  return {
+    researchNeeded: Boolean(research.needed),
+    researchReasons: research.reasons || [],
+    researchProvider: research.provider || "",
+    researchConfidence: research.confidence || "",
+    researchSkipped: Boolean(research.skipped),
+    researchError: research.error || "",
+    researchSkipReason: research.skipReason || ""
+  };
 }
 
 export function buildRuleIndex(taskTable) {
@@ -274,6 +298,10 @@ async function main() {
   const model = readArg("model", process.env.OPENAI_MODEL || "");
   const out = readArg("out", "output/keyword-agent/last-run-summary.json");
   const writeDelayMs = Number(readArg("write-delay-ms", "1200")) || 1200;
+  const researchEnabled = readFlag("research");
+  const researchMaxItems = Number(readArg("research-max", "5")) || 5;
+  const researchEndpoint = readArg("research-endpoint", process.env.KEYWORD_RESEARCH_ENDPOINT || "");
+  const researchFailOpen = !readFlag("research-fail-closed");
 
   const [taskTable, keywordTable] = await Promise.all([
     readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:S`),
@@ -291,10 +319,31 @@ async function main() {
     force
   });
   const selectedRows = collected.selectedRows;
-  const pending = collected.pending;
+  let pending = collected.pending;
   const summaries = [...collected.summaries];
+  const researchIgnoredInRulesMode = researchEnabled && isRulesMode(mode);
+  const researchProviderMissing = researchEnabled && !dryRun && !researchIgnoredInRulesMode && !researchEndpoint;
+  let researchProviderName = "";
 
-  const evaluations = mode === "rules"
+  if (researchEnabled && !researchIgnoredInRulesMode) {
+    const provider = dryRun
+      ? createNoopResearchProvider()
+      : (researchEndpoint
+          ? createHttpResearchProvider({
+              endpoint: researchEndpoint,
+              apiKey: process.env.KEYWORD_RESEARCH_API_KEY || ""
+            })
+          : createNoopResearchProvider());
+    researchProviderName = provider.name;
+    pending = await enrichItemsWithResearch(pending, {
+      enabled: true,
+      provider,
+      maxResearchItems: dryRun ? 0 : researchMaxItems,
+      failOpen: researchFailOpen
+    });
+  }
+
+  const evaluations = isRulesMode(mode)
     ? pending.map((item) => ({
         rowNumber: item.rowNumber,
         values: evaluateKeywordAgentRow(item.row, item.rule).values,
@@ -346,11 +395,12 @@ async function main() {
       keyword,
       status: dryRun ? "dry-run" : "updated",
       mode,
-      model: mode === "rules" ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
+      model: isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
       changed,
       values: Object.fromEntries(changed.map((header) => [header, values[normalizedHeaderIndex(keywordTable.headers, header)]])),
       modelRationale: evaluation.modelRationale,
       warnings: evaluation.warnings || [],
+      ...researchSummaryFields(item.research),
       writeResult
     });
     if (!dryRun && writeDelayMs > 0) {
@@ -366,11 +416,22 @@ async function main() {
       dryRun,
       force,
       mode,
-      model: mode === "rules" ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
+      model: isRulesMode(mode) ? "" : (model || process.env.OPENAI_MODEL || "gpt-5.4-mini"),
       writeDelayMs,
       limit,
       fromRow,
       toRow,
+      research: {
+        enabled: researchEnabled,
+        effective: researchEnabled && !researchIgnoredInRulesMode,
+        ignoredInRulesMode: researchIgnoredInRulesMode,
+        provider: researchProviderName,
+        providerMissing: researchProviderMissing,
+        endpointConfigured: Boolean(researchEndpoint),
+        maxResearchItems: researchMaxItems,
+        failOpen: researchFailOpen,
+        dryRunProviderSkipped: researchEnabled && dryRun && !researchIgnoredInRulesMode
+      },
       ranAt: new Date().toISOString()
     },
     selectedRows: selectedRows.length,
