@@ -4,7 +4,10 @@ import {
   enrichItemsWithResearch,
   summarizeResearchForPrompt
 } from "../src/lib/keyword-agent-research.mjs";
-import { detectResearchNeeds } from "../src/lib/keyword-research-boundary.mjs";
+import {
+  detectResearchNeeds,
+  normalizeKeywordText
+} from "../src/lib/keyword-research-boundary.mjs";
 import { createMockResearchProvider } from "../src/lib/keyword-research-provider.mjs";
 
 function item(keyword, rule = { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas" }) {
@@ -33,14 +36,39 @@ test("detectResearchNeeds flags technical uncertainty", () => {
   );
 });
 
+test("normalizeKeywordText removes punctuation and normalizes common separators", () => {
+  assert.equal(normalizeKeywordText("401(k) Calculator"), "401 k calculator");
+  assert.equal(normalizeKeywordText("OEM/ODM microphone factory"), "oem odm microphone factory");
+});
+
 test("detectResearchNeeds ignores known physical generators", () => {
   const result = detectResearchNeeds({ keyword: "honda generator" });
 
   assert.equal(result.needed, false);
 });
 
+test("detectResearchNeeds ignores generac generator even with brand and suffix signals", () => {
+  const result = detectResearchNeeds({ keyword: "generac generator" });
+
+  assert.equal(result.needed, false);
+  assert.equal(result.level, "none");
+});
+
 test("detectResearchNeeds ignores financial education estimators", () => {
   const result = detectResearchNeeds({ keyword: "401k calculator" });
+
+  assert.equal(result.needed, false);
+});
+
+test("detectResearchNeeds ignores punctuated 401k financial education estimators", () => {
+  const result = detectResearchNeeds({ keyword: "401(k) calculator" });
+
+  assert.equal(result.needed, false);
+  assert.equal(result.level, "none");
+});
+
+test("detectResearchNeeds ignores savings calculator financial education estimators", () => {
+  const result = detectResearchNeeds({ keyword: "savings calculator" });
 
   assert.equal(result.needed, false);
 });
@@ -52,6 +80,41 @@ test("detectResearchNeeds ignores clear B2B showcase keywords", () => {
   });
 
   assert.equal(result.needed, false);
+});
+
+test("detectResearchNeeds ignores plural clear B2B showcase keywords", () => {
+  const cases = [
+    "gaming microphone manufacturers",
+    "fpv drone suppliers",
+    "memory chip distributors"
+  ];
+
+  for (const keyword of cases) {
+    const result = detectResearchNeeds({
+      keyword,
+      rule: { "意图": "B端展示站" }
+    });
+
+    assert.equal(result.needed, false, keyword);
+    assert.equal(result.level, "none", keyword);
+  }
+});
+
+test("detectResearchNeeds still flags B2B keywords with technical uncertainty", () => {
+  const result = detectResearchNeeds({
+    keyword: "enterprise ai solution",
+    rule: { "意图": "B端展示站" }
+  });
+
+  assert.equal(result.needed, true);
+  assert.equal(result.reasons.includes("technical_uncertainty"), true);
+});
+
+test("detectResearchNeeds flags additional brand boundary keywords", () => {
+  const result = detectResearchNeeds({ keyword: "adobe qr code generator" });
+
+  assert.equal(result.needed, true);
+  assert.equal(result.reasons.includes("brand_boundary"), true);
 });
 
 test("enrichItemsWithResearch disabled does not call provider", async () => {

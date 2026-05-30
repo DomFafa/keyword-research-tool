@@ -88,18 +88,30 @@ const FINANCIAL_EDUCATION_PATTERNS = [
   /\bmortgage\s+calculator\b/,
   /\bloan\s+calculator\b/,
   /\bcompound\s+interest\s+calculator\b/,
+  /\bsavings\s+calculator\b/,
   /\bdebt\s+payoff\s+calculator\b/
 ];
 
 const B2B_CLEAR_PATTERNS = [
-  /\bmanufacturer\b/,
-  /\bsupplier\b/,
-  /\bdistributor\b/,
-  /\bfactory\b/,
+  /\bmanufacturers?\b/,
+  /\bsuppliers?\b/,
+  /\bfactor(?:y|ies)\b/,
+  /\bwholesale\b/,
+  /\bdistributors?\b/,
+  /\bvendors?\b/,
   /\boem\b/,
   /\bodm\b/,
+  /\bprivate\s+label\b/,
+  /\bcustom\s+manufacturers?\b/,
+  /\bbulk\b/,
+  /\bindustrial\b/,
+  /\benterprise\b/,
+  /\bsolutions?\b/,
+  /\bservice\s+providers?\b/,
+  /\bcompan(?:y|ies)\b/,
   /\brfq\b/,
-  /\bquote\b/
+  /\bquotes?\b/,
+  /\bquotation\b/
 ];
 
 function hasAny(patterns, text) {
@@ -125,6 +137,8 @@ function levelForReasons(reasons) {
 export function normalizeKeywordText(keyword) {
   return String(keyword || "")
     .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
