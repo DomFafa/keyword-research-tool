@@ -5,6 +5,8 @@ import { getSpreadsheetId } from "./google-sheet.mjs";
 
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function base64UrlJson(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
@@ -61,14 +63,29 @@ export async function getServiceAccountAccessToken(keyPath = "") {
   signer.update(unsigned);
   const jwt = `${unsigned}.${signer.sign(key.private_key).toString("base64url")}`;
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt
-    })
-  });
+  let response;
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      response = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion: jwt
+        })
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await sleep(500 * attempt);
+      }
+    }
+  }
+  if (!response) {
+    return { ok: false, reason: lastError?.message || "token_fetch_failed" };
+  }
   const data = await response.json();
   if (!response.ok) {
     return { ok: false, status: response.status, reason: data.error_description || data.error || "token_request_failed" };
@@ -95,14 +112,34 @@ async function sheetsApiFetch({
   }
 
   const spreadsheetId = getSpreadsheetId(sheetUrl);
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token.accessToken}`,
-      "content-type": "application/json"
-    },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
+  let response;
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token.accessToken}`,
+          "content-type": "application/json"
+        },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+      if (![429, 500, 502, 503, 504].includes(response.status)) {
+        break;
+      }
+      if (attempt < 3) {
+        await sleep(750 * attempt);
+      }
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await sleep(750 * attempt);
+      }
+    }
+  }
+  if (!response) {
+    return { ok: false, reason: lastError?.message || "sheets_api_fetch_failed" };
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     return {
@@ -249,6 +286,55 @@ export async function formatRejectedKeywordCells({
   return {
     ok: true,
     formattedCells: requests.length,
+    clientEmail: result.clientEmail
+  };
+}
+
+export function buildCellBackgroundRequests({ sheetId, cells, color }) {
+  return cells.map((cell) => ({
+    repeatCell: {
+      range: {
+        sheetId: Number(sheetId),
+        startRowIndex: Number(cell.row) - 1,
+        endRowIndex: Number(cell.row),
+        startColumnIndex: Number(cell.column),
+        endColumnIndex: Number(cell.column) + 1
+      },
+      cell: {
+        userEnteredFormat: {
+          backgroundColor: color
+        }
+      },
+      fields: "userEnteredFormat.backgroundColor"
+    }
+  }));
+}
+
+export async function formatCellBackgrounds({
+  sheetUrl,
+  sheetId,
+  cells,
+  color = { red: 1, green: 0, blue: 0 },
+  keyPath = ""
+}) {
+  if (!cells.length) {
+    return { skipped: true, reason: "no_cells" };
+  }
+  const result = await batchUpdateSheet({
+    sheetUrl,
+    keyPath,
+    requests: buildCellBackgroundRequests({ sheetId, cells, color })
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      status: result.status,
+      reason: result.reason || "batch_update_failed"
+    };
+  }
+  return {
+    ok: true,
+    formattedCells: cells.length,
     clientEmail: result.clientEmail
   };
 }

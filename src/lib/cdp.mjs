@@ -12,7 +12,7 @@ const DEFAULT_ACTIVE_PORT_FILES = [
 
 const FALLBACK_DEBUGGING_PORTS = ["9222", "9333"];
 
-function readDebuggerEndpointFromPort(port) {
+export function readDebuggerEndpointFromPort(port) {
   try {
     const output = execFileSync("curl", [
       "-fsS",
@@ -95,7 +95,10 @@ export class CdpClient {
 
       const handlers = this.eventHandlers.get(message.method);
       if (handlers) {
-        handlers.forEach((handler) => handler(message.params ?? {}));
+        handlers.forEach((handler) => handler({
+          ...(message.params ?? {}),
+          sessionId: message.sessionId
+        }));
       }
     });
 
@@ -228,21 +231,29 @@ export async function waitForChromeTargetWithCdp(cdp, predicate, timeoutMs = 150
 }
 
 export async function navigateAndWait(cdp, sessionId, url, timeoutMs = 30000) {
+  let timer;
+  let unsubscribe = () => {};
   const loaded = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       unsubscribe();
       reject(new Error(`Timed out while loading ${url}`));
     }, timeoutMs);
 
-    const unsubscribe = cdp.on("Page.loadEventFired", () => {
+    unsubscribe = cdp.on("Page.loadEventFired", () => {
       clearTimeout(timer);
       unsubscribe();
       resolve();
     });
   });
 
-  await cdp.send("Page.navigate", { url }, sessionId);
-  await loaded;
+  try {
+    await cdp.send("Page.navigate", { url }, sessionId);
+    await loaded;
+  } catch (error) {
+    clearTimeout(timer);
+    unsubscribe();
+    throw error;
+  }
 }
 
 export async function evaluate(cdp, sessionId, expression, timeoutMs = 30000) {

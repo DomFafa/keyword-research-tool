@@ -6,6 +6,13 @@
   "scripts": {
     "read:sheet": "node src/read-google-sheet.mjs",
     "semrush:step1": "node src/semrush-step1.mjs",
+    "agent:keyword": "node src/keyword-agent.mjs",
+    "bing:precheck": "node src/bing-precheck.mjs",
+    "bing:download-related": "node src/bing-download-related.mjs",
+    "bing:hubstudio-serp": "node src/bing-hubstudio-serp.mjs",
+    "feishu:test": "node src/feishu-test-connection.mjs",
+    "hubstudio:test": "node src/hubstudio-test-connection.mjs",
+    "hubstudio:open": "node src/hubstudio-open-browser.mjs",
     "check": "for file in $(find src test -name '*.mjs' | sort); do node --check \"$file\" || exit 1; done",
     "test": "node --test"
   },
