@@ -56,7 +56,7 @@ const EXCLUSION_PATTERNS = [
   { type: "破解盗版", pattern: /\b(cracks?|cracked|torrent|pirate|mod\s*apk|keygen|activation|bypass|unlocker?)\b/ },
   { type: "医疗高风险", pattern: /\b(dosage|dose|drug|medication|symptom|diagnosis|peptide)\b/ },
   { type: "法律税务高风险", pattern: /\b(legal|lawyer|lawsuit|tax|irs)\b/ },
-  { type: "金融投资建议", pattern: /\b(stock|crypto|forex|trading|investment|401k|retirement|option\s*profit)\b/ },
+  { type: "金融投资建议", pattern: /\b(stock\s+market|crypto\s+trading|day\s+trading|options?\s+profit|stock|crypto|forex|trading|investment|investing)\b/ },
   { type: "实体发电机/商品词", pattern: /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/ }
 ];
 
@@ -77,6 +77,10 @@ const HEAVY_PATTERNS = [
 
 const SAAS_SIGNAL_PATTERNS = [
   /\b(invoice|email\s+signature|signature|citation|mla|apa|chicago|acs|ama|ieee|resume|cover\s+letter|barcode|qr|time\s+card|time\s+clock|grade|gpa|pdf|csv|api|bulk|batch|template|tracker|planner|editor|compiler|formatter|checker)\b/
+];
+
+const FINANCIAL_EDUCATION_PATTERNS = [
+  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff)\s+calculator\b/
 ];
 
 function normalize(value) {
@@ -137,6 +141,22 @@ function isBrandKeyword(text) {
   return hasAny(BRAND_PATTERNS, text);
 }
 
+function detectFinancialEducationRisk(keyword) {
+  const text = normalize(keyword);
+  if (!hasAny(FINANCIAL_EDUCATION_PATTERNS, text)) {
+    return {
+      matched: false,
+      label: "",
+      rationale: ""
+    };
+  }
+  return {
+    matched: true,
+    label: "金融教育估算/YMYL",
+    rationale: "金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
+  };
+}
+
 function classifyIntent(keyword, rule) {
   const text = normalize(keyword);
   const desiredIntent = targetIntent(rule);
@@ -184,7 +204,16 @@ function classifyIntent(keyword, rule) {
   };
 }
 
-function technicalDifficulty(keyword) {
+function technicalDifficulty(keyword, financialRisk = { matched: false }) {
+  if (financialRisk.matched) {
+    return {
+      level: "中",
+      difficulty: "中：需谨慎设计假设和免责声明",
+      recommended: true,
+      reason: "纯前端估算器可做但需免责声明"
+    };
+  }
+
   const text = normalize(keyword);
   if (hasAny(HEAVY_PATTERNS, text)) {
     return {
@@ -255,7 +284,7 @@ function rating(secondJudgement, thirdJudgement) {
   return "B";
 }
 
-function buildRecommendation({ keyword, difficulty, monetization, brand }) {
+function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk }) {
   const parts = [];
   if (monetization.channel === "轻saas") {
     parts.push("做免费入口+保存/批量/导出付费");
@@ -266,6 +295,9 @@ function buildRecommendation({ keyword, difficulty, monetization, brand }) {
   }
   if (difficulty.level === "重") {
     parts.push("技术重不适合边缘轻站");
+  }
+  if (financialRisk?.matched) {
+    parts.push("做教育估算器，强化免责声明");
   }
   if (brand) {
     parts.push("涉及品牌词需避开商标误导");
@@ -296,7 +328,8 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
 
   const text = normalize(keyword);
   const brand = isBrandKeyword(text);
-  const difficulty = technicalDifficulty(keyword);
+  const financialRisk = detectFinancialEducationRisk(keyword);
+  const difficulty = technicalDifficulty(keyword, financialRisk);
   const secondRecommended = difficulty.recommended && abilityMatches(difficulty, rule);
   const secondJudgement = secondRecommended ? "推荐" : "不推荐";
   const monetization = chooseMonetization(keyword);
@@ -312,9 +345,10 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   result["第二次判断"] = secondJudgement;
   result["变现渠道"] = monetization.channel;
   result["第三次判断"] = thirdJudgement;
-  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand });
+  result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk });
   result["判断依据"] = compactText([
     intentResult.reason,
+    financialRisk.matched ? financialRisk.rationale : "",
     difficulty.reason,
     monetization.reason,
     channelAllowed ? "" : "不匹配客户变现渠道",

@@ -48,6 +48,33 @@ test("keyword agent excludes adult and high-risk terms", () => {
   assert.equal(evaluateKeywordAgentRow(row("investment calculator"), toolRule).values["第一次判断"], "排除");
 });
 
+test("keyword agent keeps financial education calculators with risk warnings", () => {
+  for (const keyword of ["401k calculator", "retirement calculator", "mortgage calculator", "loan calculator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), {
+      ...toolRule,
+      "变现渠道1": "广告",
+      "变现渠道2": ""
+    });
+
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.equal(result.values["agent状态"], "完成");
+    assert.match(result.values["判断依据"], /教育|YMYL|财务建议|免责声明/);
+    assert.match(result.values["建议"], /教育|估算|财务建议|免责声明/);
+  }
+});
+
+test("keyword agent still excludes tax and investment calculators", () => {
+  const tax = evaluateKeywordAgentRow(row("tax calculator"), toolRule);
+  assert.equal(tax.values["意图"], "其他");
+  assert.equal(tax.values["第一次判断"], "排除");
+  assert.notEqual(tax.values["判断依据"], "");
+  assert.equal(tax.values["agent状态"], "排除");
+
+  const crypto = evaluateKeywordAgentRow(row("crypto calculator"), toolRule);
+  assert.equal(crypto.values["第一次判断"], "排除");
+  assert.match(crypto.values["判断依据"], /金融投资|高风险|投资建议/);
+});
+
 test("keyword agent rejects physical generator product keywords", () => {
   for (const keyword of ["honda generator", "solar generator", "portable generator"]) {
     const result = evaluateKeywordAgentRow(row(keyword), toolRule);
