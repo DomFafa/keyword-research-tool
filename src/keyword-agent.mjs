@@ -32,32 +32,47 @@ function normalizeKey(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function buildRuleIndex(taskTable) {
-  const byRoot = new Map();
-  const byKeyword = new Map();
+export function buildRuleIndex(taskTable) {
+  const rootRules = new Map();
+  const keywordRules = new Map();
   for (const row of taskTable.rows) {
     const root = normalizeKey(row.record["词根"]);
     const keyword = normalizeKey(row.record["关键词"]);
     if (root) {
-      byRoot.set(root, row.record);
+      const candidates = rootRules.get(root) || [];
+      candidates.push(row);
+      rootRules.set(root, candidates);
     }
     if (keyword) {
-      byKeyword.set(keyword, row.record);
+      const candidates = keywordRules.get(keyword) || [];
+      candidates.push(row);
+      keywordRules.set(keyword, candidates);
     }
   }
-  return { byRoot, byKeyword };
+  return { rootRules, keywordRules };
 }
 
-function findRule(keywordRow, ruleIndex) {
+export function findRule(keywordRow, ruleIndex) {
   const root = normalizeKey(keywordRow.record["词根"]);
   const keyword = normalizeKey(keywordRow.record["关键词"]);
-  if (root && ruleIndex.byRoot.has(root)) {
-    return ruleIndex.byRoot.get(root);
+  const source = root ? `词根=${root}` : `关键词=${keyword}`;
+  const candidates = root
+    ? ruleIndex.rootRules.get(root) || []
+    : ruleIndex.keywordRules.get(keyword) || [];
+
+  if (candidates.length === 0) {
+    return null;
   }
-  if (keyword && ruleIndex.byKeyword.has(keyword)) {
-    return ruleIndex.byKeyword.get(keyword);
+  if (candidates.length === 1) {
+    return candidates[0].record;
   }
-  return null;
+  const taskRows = candidates
+    .map((candidate) => candidate.rowNumber)
+    .filter((rowNumber) => rowNumber !== undefined && rowNumber !== null)
+    .join(", ");
+  throw new Error(
+    `关键词规则不唯一: 关键词总表第 ${keywordRow.rowNumber} 行 ${source} 匹配到词根拓展第 ${taskRows || "未知"} 行。请先拆分词根或后续引入 taskRunKey。`
+  );
 }
 
 function normalizedHeaderIndex(headers, header, tableName = KEYWORD_TOTAL_SHEET) {
