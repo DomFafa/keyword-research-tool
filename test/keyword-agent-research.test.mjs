@@ -170,6 +170,15 @@ test("detectResearchNeeds flags additional brand boundary keywords", () => {
   assert.equal(result.reasons.includes("brand_boundary"), true);
 });
 
+test("detectResearchNeeds flags newly covered brand boundary keywords", () => {
+  for (const keyword of ["perchance ai story generator", "starbucks calorie calculator", "capcut video editor"]) {
+    const result = detectResearchNeeds({ keyword });
+
+    assert.equal(result.needed, true, keyword);
+    assert.equal(result.reasons.includes("brand_boundary"), true, keyword);
+  }
+});
+
 test("enrichItemsWithResearch disabled does not call provider", async () => {
   let calls = 0;
   const provider = {

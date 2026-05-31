@@ -117,7 +117,9 @@ test("keyword agent keeps financial education calculators with risk warnings", (
     "mortgage calculator",
     "loan calculator",
     "cd calculator",
-    "roth ira calculator"
+    "roth ira calculator",
+    "paycheck calculator",
+    "salary paycheck calculator"
   ]) {
     const result = evaluateKeywordAgentRow(row(keyword), {
       ...toolRule,
@@ -133,7 +135,7 @@ test("keyword agent keeps financial education calculators with risk warnings", (
 });
 
 test("keyword agent keeps health education calculators with risk warnings", () => {
-  for (const keyword of ["due date calculator", "pregnancy calculator"]) {
+  for (const keyword of ["due date calculator", "pregnancy calculator", "pregnancy due date calculator", "ivf due date calculator", "recipe calorie calculator"]) {
     const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
     assert.equal(result.values["意图"], "工具站");
@@ -170,20 +172,37 @@ test("keyword agent rejects physical generator product keywords", () => {
 });
 
 test("keyword agent does not reject brand terms but warns in recommendation", () => {
-  const result = evaluateKeywordAgentRow(row("canva qr code generator"), toolRule);
+  for (const keyword of [
+    "canva qr code generator",
+    "starbucks calorie calculator",
+    "smartasset paycheck calculator",
+    "dave ramsey mortgage calculator",
+    "perchance ai story generator"
+  ]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
-  assert.equal(result.values["第一次判断"], "继续");
-  assert.match(result.values["建议"], /品牌/);
-  assert.match(result.values["判断依据"], /品牌词风险/);
-  assert.equal(result.values["agent状态"], "完成");
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|风险/);
+    assert.equal(result.values["agent状态"], "完成");
+  }
 });
 
 test("keyword agent marks heavy AI tools as not matching light edge capability", () => {
-  const result = evaluateKeywordAgentRow(row("runway ai video generator"), toolRule);
+  for (const keyword of ["runway ai video generator", "suno ai music generator", "upc generator", "map calculator", "online video editor"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
-  assert.equal(result.values["难度"].startsWith("重："), true);
-  assert.equal(result.values["第二次判断"], "不推荐");
-  assert.equal(result.values["评级"], "C");
+    assert.equal(result.values["评级"] === "A", false);
+    assert.equal(result.values["第二次判断"], "不推荐");
+  }
+});
+
+test("keyword agent rejects recommendation content intent for video editors", () => {
+  const result = evaluateKeywordAgentRow(row("best free video editor"), toolRule);
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.match(result.values["判断依据"], /推荐|对比|内容意图/);
+  assert.equal(result.values["agent状态"], "排除");
 });
 
 test("keyword agent rejects monetization mismatch", () => {

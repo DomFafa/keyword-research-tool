@@ -12,7 +12,12 @@ const BRAND_PATTERNS = [
   /\bgemini\b/,
   /\brunway\b/,
   /\bsuno\b/,
-  /\bperplexity\b/
+  /\bperplexity\b/,
+  /\bperchance\b/,
+  /\bstarbucks\b/,
+  /\bsmartasset\b/,
+  /\bdave\s+ramsey\b/,
+  /\bcapcut\b/
 ];
 
 const AMBIGUOUS_SUFFIX_PATTERNS = [
@@ -94,6 +99,8 @@ const FINANCIAL_EDUCATION_PATTERNS = [
   /\bcertificate\s+of\s+deposit\s+calculator\b/,
   /\broth\s+ira\s+calculator\b/,
   /\bira\s+calculator\b/,
+  /\bpaycheck\s+calculator\b/,
+  /\bsalary\s+paycheck\s+calculator\b/,
   /\bdebt\s+payoff\s+calculator\b/
 ];
 

@@ -36,9 +36,13 @@ B端展示站定义：
 硬排除：
 以下 firstJudgement=排除：成人/NSFW、赌博/博彩、破解/盗版/绕过付费、医疗诊断或药物剂量、法律/税务高风险、tax calculator、IRS、lawyer、lawsuit、stock、crypto、forex、trading、investment、option profit、day trading、单位换算如 cm to inches、货币换算如 usd to cny、简单数学如 percentage calculator、日期时间简单计算如 days between dates calculator、实体商品、购买、价格、manual、parts、repair、installation、本地服务、招聘、工资、职位类关键词。
 
+健康教育估算器例外：
+pregnancy calculator、due date calculator、pregnancy due date calculator、ivf due date calculator、ovulation calculator、conception calculator、BMI/body fat/calorie/recipe calorie/TDEE calculator 可以继续。
+这些只能做健康教育估算，必须提示 YMYL / 免责声明 / 避免医疗建议。drug / dosage / diagnosis / symptom 仍然排除。
+
 金融教育估算器例外：
-不要把 401k calculator、401(k) calculator、retirement calculator、mortgage calculator、loan calculator、compound interest calculator、savings calculator、debt payoff calculator 一刀切排除。
-这些可以继续，但必须只定位为教育估算器，不提供财务建议，并在 recommendation 或 rationale 中提示 YMYL / 教育估算 / 免责声明 / 避免财务建议。
+不要把 401k calculator、401(k) calculator、retirement calculator、mortgage calculator、loan calculator、compound interest calculator、savings calculator、debt payoff calculator、cd calculator、certificate of deposit calculator、roth ira calculator、ira calculator、paycheck calculator、salary paycheck calculator 一刀切排除。
+这些可以继续，但必须只定位为教育估算器，不提供财务/税务建议，并在 recommendation 或 rationale 中提示 YMYL / 教育估算 / 免责声明 / 避免财务建议。investment/stock/crypto/forex/trading/tax 仍排除。
 
 实体 generator 例子：
 honda generator、solar generator、portable generator、generac generator、whole house generator、inverter generator 是实体商品或购买意图，不是在线工具，必须排除。
@@ -47,13 +51,14 @@ honda generator、solar generator、portable generator、generac generator、who
 品牌词不自动排除。但 recommendation 或 rationale 必须包含品牌/商标风险提示。
 只有关键词明确包含品牌信号时，才提示品牌/商标风险。不要把 generic tool keyword 误判成品牌词。
 signature generator、cursive generator、mla citation generator 不是品牌词，不要提示品牌风险。
-例子：canva qr code generator, adobe qr code generator, chipotle nutrition calculator, desmos graphing calculator, lastpass password generator。
+例子：canva qr code generator, adobe qr code generator, chipotle nutrition calculator, desmos graphing calculator, lastpass password generator, suno ai music generator, scribbr citation generator, perchance ai story generator, starbucks calorie calculator, smartasset paycheck calculator, dave ramsey mortgage calculator, capcut video editor。
 
 技术难度：
 difficulty 必须是 轻：原因 / 中：原因 / 重：原因。
 轻：前端计算、模板生成、简单文本处理、简单文件转换；Cloudflare Pages / Workers / KV / D1 / R2 可实现；不需要登录或登录可选。
 中：需要少量数据源、模板库、导出、轻量账号或轻量状态；边缘部署可做但需要验证。
 重：GPU、AI 图片/视频/音乐生成、复杂爬虫、官方授权或版权数据、实时第三方数据、复杂账号体系/队列/状态、高风险专业判断。
+AI 图片/视频/音乐/语音/故事生成器、video editor、map calculator、UPC generator 不要轻易给 A；默认中/重，需要提示 API/数据/版权/成本/校验风险。best/free/review/list 型 video editor 词是真实推荐/对比内容意图，不是工具站需求，应排除。
 
 第二次判断：
 技术轻或中，且匹配 customerConfig.abilities，输出 推荐。技术重或明显不匹配能力，输出 不推荐。abilities 为空时，不要因为能力为空而拒绝。
@@ -100,9 +105,17 @@ const EXPLICIT_BRAND_KEYWORDS = [
   "perplexity",
   "generac",
   "honda",
-  "jackery"
+  "jackery",
+  "perchance",
+  "starbucks",
+  "smartasset",
+  "dave ramsey",
+  "capcut"
 ];
 const BRAND_RISK_PATTERN = /品牌|商标|误导|同名站|截流|brand|trademark/i;
+const HEALTH_RISK_PATTERN = /健康教育|YMYL|免责声明|医疗建议|仅作教育|教育用途/i;
+const FINANCIAL_RISK_PATTERN = /金融教育|工资|税务估算|YMYL|免责声明|财务建议|税务建议|教育估算|仅供参考|Certificate of Deposit/i;
+const HEAVY_RISK_PATTERN = /AI|第三方|版权|成本|地图|地理编码|API|UPC|编码|校验|数据|视频编辑|重能力/i;
 
 const OUTPUT_SCHEMA = {
   name: "keyword_agent_batch_decision",
@@ -222,6 +235,10 @@ export function cleanupGenericBrandRiskText(text, fallback) {
   return cleaned.length >= 4 ? cleaned : fallback;
 }
 
+function includesAny(patterns, text) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
 function keywordFromRow(row, decision) {
   return String(
     row?.keyword ||
@@ -230,6 +247,90 @@ function keywordFromRow(row, decision) {
     decision?.keyword ||
     ""
   ).trim();
+}
+
+function normalizedKeyword(row, decision) {
+  return normalizeKeywordForBrand(keywordFromRow(row, decision));
+}
+
+function isHardMedicalKeyword(keyword) {
+  return /\b(drugs?|dosage|dose|diagnosis|symptoms?|medication|peptide)\b/.test(keyword);
+}
+
+function isHealthEducationCalculator(keyword) {
+  return /\b(pregnancy\s+due\s+date|ivf\s+due\s+date|due\s+date|pregnancy|ovulation|conception|bmi|body\s+fat|recipe\s+calorie|calorie|tdee)\s+calculator\b/.test(keyword);
+}
+
+function isGenericHealthExclusion(reason) {
+  return /健康|孕期|医疗|高风险|风险|medical|pregnancy|health/i.test(String(reason || ""));
+}
+
+function isHardFinancialOrTaxKeyword(keyword) {
+  return /\b(investment|stock|crypto|forex|trading|option\s+profit|tax|irs)\b/.test(keyword);
+}
+
+function isFinancialEducationCalculator(keyword) {
+  return /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira|paycheck|salary\s+paycheck)\s+calculator\b/.test(keyword) && !isHardFinancialOrTaxKeyword(keyword);
+}
+
+function isPaycheckCalculator(keyword) {
+  return /\bpaycheck\s+calculator\b|\bsalary\s+paycheck\s+calculator\b/.test(keyword);
+}
+
+function isCdCalculator(keyword) {
+  return /\bcd\s+calculator\b|\bcertificate\s+of\s+deposit\s+calculator\b/.test(keyword);
+}
+
+function isContentRecommendationIntent(keyword) {
+  return /\b(best|top|review|reviews|recommend(?:ed|ation)?|comparison)\s+(free\s+)?video\s+editors?\b|\bfree\s+video\s+editor\s+apps?\b/.test(keyword);
+}
+
+function detectHeavyOrDataCapabilityRisk(keyword) {
+  if (isContentRecommendationIntent(keyword)) {
+    return { matched: true, kind: "content", rationale: "真实意图是推荐/对比内容，不是在线工具需求" };
+  }
+  if (/\b(ai|image|video|music|song|voice)\b/.test(keyword) || /\bstory\s+generator\b/.test(keyword) || /\bonline\s+video\s+editor\b|\bvideo\s+editor\b/.test(keyword)) {
+    return { matched: true, kind: "heavy", rationale: "AI/视频/音乐/故事能力依赖第三方、版权或成本，不能按轻工具评估" };
+  }
+  if (/\bmap\s+calculator\b/.test(keyword)) {
+    return { matched: true, kind: "data", rationale: "地图计算需地理编码/API/数据来源验证，不能按轻工具评估" };
+  }
+  if (/\bupc(?:\s+barcode)?\s+generator\b/.test(keyword)) {
+    return { matched: true, kind: "data", rationale: "UPC涉及编码规则、校验和真实商品码边界，不能按轻工具评估" };
+  }
+  if (/\b(scanner|recognition|tattoo)\b/.test(keyword)) {
+    return { matched: true, kind: "heavy", rationale: "识别/扫描/生成类能力依赖重技术或第三方能力" };
+  }
+  return { matched: false, kind: "", rationale: "" };
+}
+
+function appendLimited(text, addition, limit) {
+  const raw = String(text || "").trim();
+  if (raw.includes(addition)) {
+    return raw.slice(0, limit);
+  }
+  const separator = raw ? "；" : "";
+  const combined = `${raw}${separator}${addition}`;
+  return combined.length <= limit ? combined : combined.slice(0, limit);
+}
+
+function ensureRiskText({ recommendation, rationale, pattern, recommendationAddition, rationaleAddition, field, reason, warnings }) {
+  if (pattern.test(`${recommendation} ${rationale}`)) {
+    return { recommendation, rationale };
+  }
+  const nextRecommendation = appendLimited(recommendation, recommendationAddition, 50);
+  const nextRationale = appendLimited(rationale, rationaleAddition, 80);
+  warning(
+    warnings,
+    field,
+    reason,
+    `${recommendation} | ${rationale}`,
+    `${nextRecommendation} | ${nextRationale}`
+  );
+  return {
+    recommendation: nextRecommendation,
+    rationale: nextRationale
+  };
 }
 
 function normalizeCustomerConfig(row, customerConfig = {}) {
@@ -343,15 +444,20 @@ export function buildPromptPayload(items) {
         "simple unit conversion such as cm to inches, currency conversion such as usd to cny, percentage math such as percentage calculator, or date/time arithmetic such as days between dates calculator",
         "physical products, purchase, price, manual, parts, repair, installation, local services, jobs, salary, position keywords"
       ],
+      healthEducationException: [
+        "Do not hard-exclude pregnancy calculator, due date calculator, pregnancy due date calculator, IVF due date calculator, ovulation calculator, conception calculator, BMI calculator, body fat calculator, calorie calculator, recipe calorie calculator, or TDEE calculator.",
+        "These may continue only as health education estimators. Recommendation/rationale must mention YMYL, disclaimer, education-only estimate, or avoiding medical advice. Drug/dosage/diagnosis/symptom calculators remain excluded."
+      ],
       financialEducationException: [
-        "Do not hard-exclude 401k calculator, 401(k) calculator, retirement calculator, mortgage calculator, loan calculator, compound interest calculator, savings calculator, debt payoff calculator.",
-        "These may continue as education-only estimators, but recommendation/rationale must mention YMYL, education estimate, disclaimer, or avoiding financial advice."
+        "Do not hard-exclude 401k calculator, 401(k) calculator, retirement calculator, mortgage calculator, loan calculator, compound interest calculator, savings calculator, debt payoff calculator, cd calculator, certificate of deposit calculator, Roth IRA calculator, IRA calculator, paycheck calculator, or salary paycheck calculator.",
+        "These may continue as education-only estimators, but recommendation/rationale must mention YMYL, education estimate, disclaimer, or avoiding financial/tax advice. CD calculator means Certificate of Deposit calculator, not credit limit. Investment/stock/crypto/forex/trading/tax calculators remain excluded."
       ],
       semanticWarnings: [
         "Do not classify by suffix alone. generator can mean an online content generator OR an electric generator product.",
         "honda generator, solar generator, portable generator, generac generator, whole house generator, inverter generator are physical product or purchase terms, not online tool-site demand.",
         "Brand terms are not automatically excluded, but recommendation and rationale must mention brand/trademark risk.",
-        "Only mention brand/trademark risk when the keyword explicitly contains a brand signal. Do not treat generic tool keywords as brand terms: signature generator, cursive generator, and mla citation generator are not brand keywords. Canva QR code generator, Adobe QR code generator, Chipotle nutrition calculator, Desmos graphing calculator, and LastPass password generator are brand keywords."
+        "Only mention brand/trademark risk when the keyword explicitly contains a brand signal. Do not treat generic tool keywords as brand terms: signature generator, cursive generator, and mla citation generator are not brand keywords. Canva QR code generator, Adobe QR code generator, Chipotle nutrition calculator, Desmos graphing calculator, LastPass password generator, Suno AI music generator, Scribbr citation generator, Perchance AI story generator, Starbucks calorie calculator, SmartAsset paycheck calculator, Dave Ramsey mortgage calculator, and CapCut video editor are brand keywords.",
+        "AI image/video/music/voice/story generators, video editors, map calculator, UPC generator, and UPC barcode generator should not be rated A by default; mention API/data/copyright/cost/validation risk and downgrade when needed. Best/free/review/list video editor keywords are recommendation/comparison content intent, not direct tool-site intent."
       ],
       difficulty: "Use format 轻：reason, 中：reason, or 重：reason. 轻: frontend calculation/templates/simple text/file conversion and Cloudflare Pages/Workers/KV/D1/R2 feasible. 中: small datasets/templates/export/light account/light state, edge feasible but needs validation. 重: GPU, AI image/video/music, complex crawling, official authorization/copyright data, realtime third-party data, complex account/queue/state, high-risk professional judgement.",
       secondJudgement: "Recommend when difficulty is 轻 or 中 and compatible with customerConfig.abilities. If abilities are empty, do not reject because abilities are empty. Do not recommend when difficulty is 重 or clearly outside abilities.",
@@ -399,6 +505,7 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
   const decision = llmOutput || {};
   const warnings = [];
   const outputRowNumber = rowNumberFor(row, decision);
+  const keyword = normalizedKeyword(row, decision);
   let intent = String(decision.intent || "").trim();
   if (intent !== config.desiredIntent && intent !== "其他") {
     const fallback = decision.firstJudgement === "继续" ? config.desiredIntent : "其他";
@@ -408,6 +515,43 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
 
   const firstJudgement = decision.firstJudgement === "继续" && intent !== "其他" ? "继续" : "排除";
   const excluded = firstJudgement === "排除";
+  const healthEducation = isHealthEducationCalculator(keyword) && !isHardMedicalKeyword(keyword);
+  if (excluded && healthEducation && isGenericHealthExclusion(decision.rationale)) {
+    const monetization = config.allowedMonetizationChannels.includes("广告") || config.allowedMonetizationChannels.length === 0
+      ? "广告"
+      : config.allowedMonetizationChannels[0] || "广告";
+    const thirdJudgement =
+      config.allowedMonetizationChannels.length === 0 ||
+      config.allowedMonetizationChannels.includes(monetization)
+        ? "推荐"
+        : "不推荐";
+    const secondJudgement = "推荐";
+    warning(
+      warnings,
+      "健康教育风险",
+      "健康教育估算器被误排除，已修正",
+      decision.rationale,
+      "健康教育估算/YMYL，仅作教育用途，避免医疗建议"
+    );
+    return {
+      rowNumber: outputRowNumber,
+      values: {
+        "意图": config.desiredIntent,
+        "第一次判断": "继续",
+        "难度": "中：需谨慎设计假设和免责声明",
+        "第二次判断": secondJudgement,
+        "变现渠道": monetization,
+        "第三次判断": thirdJudgement,
+        "建议": "做健康教育估算器，强化免责声明",
+        "判断依据": "健康教育估算/YMYL，仅作教育用途，避免医疗建议",
+        "评级": computeRating(secondJudgement, thirdJudgement),
+        [AGENT_STATUS_COLUMN]: "完成"
+      },
+      modelRationale: String(decision.rationale || "").trim(),
+      warnings
+    };
+  }
+
   if (excluded) {
     const rationale = correctedRationale({
       value: decision.rationale,
@@ -428,6 +572,43 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
       warnings
     };
   }
+  if (isHardFinancialOrTaxKeyword(keyword) || isHardMedicalKeyword(keyword)) {
+    const reason = isHardFinancialOrTaxKeyword(keyword)
+      ? "金融投资/税务高风险，不适合工具站直接承接"
+      : "医疗诊断或药物剂量高风险，不能做普通工具站";
+    warning(warnings, "硬排除", "高风险关键词被误判继续，已排除", decision.rationale, reason);
+    return {
+      rowNumber: outputRowNumber,
+      values: {
+        "意图": "其他",
+        "第一次判断": "排除",
+        "判断依据": reason,
+        [AGENT_STATUS_COLUMN]: "排除"
+      },
+      modelRationale: String(decision.rationale || "").trim(),
+      warnings
+    };
+  }
+  if (isContentRecommendationIntent(keyword)) {
+    warning(
+      warnings,
+      "真实意图",
+      "推荐/对比内容意图不是在线工具需求，已排除",
+      decision.rationale,
+      "真实意图是推荐/对比内容，不是在线工具需求"
+    );
+    return {
+      rowNumber: outputRowNumber,
+      values: {
+        "意图": "其他",
+        "第一次判断": "排除",
+        "判断依据": "真实意图是推荐/对比内容，不是在线工具需求",
+        [AGENT_STATUS_COLUMN]: "排除"
+      },
+      modelRationale: String(decision.rationale || "").trim(),
+      warnings
+    };
+  }
 
   intent = correctedValue({
     field: "意图",
@@ -438,8 +619,8 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     reason: "继续行意图必须等于客户目标意图"
   });
 
-  const difficulty = normalizedDifficulty(decision.difficulty, warnings);
-  const secondJudgement = correctedValue({
+  let difficulty = normalizedDifficulty(decision.difficulty, warnings);
+  let secondJudgement = correctedValue({
     field: "第二次判断",
     value: decision.secondJudgement,
     fallback: "不推荐",
@@ -447,7 +628,7 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     warnings,
     reason: "第二次判断不合法，已兜底"
   });
-  const monetization = correctedValue({
+  let monetization = correctedValue({
     field: "变现渠道",
     value: normalizeMonetization(decision.monetization),
     fallback: "其他",
@@ -458,19 +639,14 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
   const llmThirdJudgement = VALID_JUDGEMENTS.includes(decision.thirdJudgement)
     ? decision.thirdJudgement
     : "不推荐";
-  const channelAllowed =
+  let channelAllowed =
     config.allowedMonetizationChannels.length === 0 ||
     config.allowedMonetizationChannels.includes(monetization);
-  const thirdJudgement = channelAllowed ? llmThirdJudgement : "不推荐";
+  let thirdJudgement = channelAllowed ? llmThirdJudgement : "不推荐";
   if (!VALID_JUDGEMENTS.includes(decision.thirdJudgement)) {
     warning(warnings, "第三次判断", "第三次判断不合法，已兜底", decision.thirdJudgement, thirdJudgement);
   } else if (decision.thirdJudgement !== thirdJudgement) {
     warning(warnings, "第三次判断", "变现渠道不在客户允许范围，已重算为不推荐", decision.thirdJudgement, thirdJudgement);
-  }
-
-  const rating = computeRating(secondJudgement, thirdJudgement);
-  if (!VALID_RATINGS.includes(decision.rating) || decision.rating !== rating) {
-    warning(warnings, "评级", "评级必须由第二次判断和第三次判断重算", decision.rating, rating);
   }
 
   let rationale = correctedRationale({
@@ -480,11 +656,87 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     warnings
   });
   let recommendation = correctedRecommendation(decision.recommendation, warnings);
-  const keyword = keywordFromRow(row, decision);
-  if (
-    !hasExplicitBrandSignal(keyword) &&
-    (containsBrandRiskText(recommendation) || containsBrandRiskText(rationale))
-  ) {
+
+  const financialEducation = isFinancialEducationCalculator(keyword);
+  if (financialEducation) {
+    if (isCdCalculator(keyword)) {
+      const before = `${recommendation} | ${rationale}`;
+      recommendation = recommendation.replace(/信用额度/g, "Certificate of Deposit定存");
+      rationale = rationale.replace(/信用额度/g, "Certificate of Deposit定存");
+      if (!/Certificate of Deposit|金融教育|YMYL|免责声明|财务建议/.test(`${recommendation} ${rationale}`)) {
+        rationale = appendLimited(rationale, "Certificate of Deposit金融教育估算，仅供参考", 80);
+      }
+      if (before !== `${recommendation} | ${rationale}`) {
+        warning(warnings, "金融教育风险", "cd calculator 已按 Certificate of Deposit 解释", before, `${recommendation} | ${rationale}`);
+      }
+    }
+    const ensured = ensureRiskText({
+      recommendation,
+      rationale,
+      pattern: FINANCIAL_RISK_PATTERN,
+      recommendationAddition: isPaycheckCalculator(keyword) ? "工资/税务估算需免责声明" : "金融教育估算需免责声明",
+      rationaleAddition: isPaycheckCalculator(keyword)
+        ? "工资/税务估算仅供参考，避免财务/税务建议"
+        : "金融教育估算/YMYL，仅供参考，避免财务建议",
+      field: "金融教育风险",
+      reason: "金融/工资教育估算器缺少免责声明，已补充",
+      warnings
+    });
+    recommendation = ensured.recommendation;
+    rationale = ensured.rationale;
+  }
+
+  if (healthEducation) {
+    const ensured = ensureRiskText({
+      recommendation,
+      rationale,
+      pattern: HEALTH_RISK_PATTERN,
+      recommendationAddition: "健康教育估算需免责声明",
+      rationaleAddition: "健康教育估算/YMYL，仅作教育用途，避免医疗建议",
+      field: "健康教育风险",
+      reason: "健康教育估算器缺少免责声明，已补充",
+      warnings
+    });
+    recommendation = ensured.recommendation;
+    rationale = ensured.rationale;
+  }
+
+  const heavyRisk = detectHeavyOrDataCapabilityRisk(keyword);
+  if (heavyRisk.matched && heavyRisk.kind !== "content") {
+    const before = {
+      difficulty,
+      secondJudgement,
+      thirdJudgement,
+      rationale
+    };
+    difficulty = heavyRisk.kind === "data"
+      ? "中：需验证API/数据来源和编码校验"
+      : "重：依赖AI/第三方/版权/成本能力";
+    secondJudgement = "不推荐";
+    rationale = appendLimited(rationale, heavyRisk.rationale, 80);
+    warning(
+      warnings,
+      "能力风险",
+      "AI/视频/地图/UPC类不能轻易评为A，已降级",
+      JSON.stringify(before),
+      JSON.stringify({ difficulty, secondJudgement, thirdJudgement, rationale })
+    );
+  }
+
+  if (hasExplicitBrandSignal(keyword)) {
+    const ensured = ensureRiskText({
+      recommendation,
+      rationale,
+      pattern: BRAND_RISK_PATTERN,
+      recommendationAddition: "注意品牌/商标风险",
+      rationaleAddition: "关键词含品牌信号，需避免商标误导",
+      field: "品牌风险",
+      reason: "品牌关键词缺少品牌/商标风险，已补充",
+      warnings
+    });
+    recommendation = ensured.recommendation;
+    rationale = ensured.rationale;
+  } else if (containsBrandRiskText(recommendation) || containsBrandRiskText(rationale)) {
     const beforeRecommendation = recommendation;
     const beforeRationale = rationale;
     recommendation = cleanupGenericBrandRiskText(recommendation, "可做轻量工具页，避免夸大功能");
@@ -496,6 +748,11 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
       `${beforeRecommendation} | ${beforeRationale}`,
       `${recommendation} | ${rationale}`
     );
+  }
+
+  const rating = computeRating(secondJudgement, thirdJudgement);
+  if (!VALID_RATINGS.includes(decision.rating) || decision.rating !== rating) {
+    warning(warnings, "评级", "评级必须由第二次判断和第三次判断重算", decision.rating, rating);
   }
 
   return {

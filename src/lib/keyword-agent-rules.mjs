@@ -47,7 +47,11 @@ const BRAND_PATTERNS = [
   /\bgenerac\b/,
   /\bhonda\b/,
   /\bjackery\b/,
-  /\bperchance\b/
+  /\bperchance\b/,
+  /\bstarbucks\b/,
+  /\bsmartasset\b/,
+  /\bdave\s+ramsey\b/,
+  /\bcapcut\b/
 ];
 
 const EXCLUSION_PATTERNS = [
@@ -57,6 +61,7 @@ const EXCLUSION_PATTERNS = [
   { type: "医疗高风险", pattern: /\b(dosage|dose|drug|medication|symptom|diagnosis|peptide)\b/ },
   { type: "法律税务高风险", pattern: /\b(legal|lawyer|lawsuit|tax|irs)\b/ },
   { type: "金融投资建议", pattern: /\b(stock\s+market|crypto\s+trading|day\s+trading|options?\s+profit|stock|crypto|forex|trading|investment|investing)\b/ },
+  { type: "推荐/对比内容意图", pattern: /\b(best|top|review|reviews|recommend(?:ed|ation)?|comparison)\s+(free\s+)?video\s+editors?\b|\bfree\s+video\s+editor\s+apps?\b/ },
   { type: "实体发电机/商品词", pattern: /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/ }
 ];
 
@@ -80,11 +85,11 @@ const SAAS_SIGNAL_PATTERNS = [
 ];
 
 const FINANCIAL_EDUCATION_PATTERNS = [
-  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira)\s+calculator\b/
+  /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira|paycheck|salary\s+paycheck)\s+calculator\b/
 ];
 
 const HEALTH_EDUCATION_PATTERNS = [
-  /\b(due\s+date|pregnancy|ovulation|conception|bmi|body\s*fat|calorie|tdee)\s+calculator\b/
+  /\b(pregnancy\s+due\s+date|ivf\s+due\s+date|due\s+date|pregnancy|ovulation|conception|bmi|body\s*fat|recipe\s+calorie|calorie|tdee)\s+calculator\b/
 ];
 
 const B2B_SHOWCASE_PATTERNS = [
@@ -161,7 +166,9 @@ function detectFinancialEducationRisk(keyword) {
   return {
     matched: true,
     label: "金融教育估算/YMYL",
-    rationale: "金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
+    rationale: /\b(cd|certificate\s+of\s+deposit)\s+calculator\b/.test(text)
+      ? "Certificate of Deposit金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
+      : "金融教育估算/YMYL，仅作教育用途，需免责声明避免财务建议"
   };
 }
 
@@ -290,6 +297,22 @@ function technicalDifficulty(
   }
 
   const text = normalize(keyword);
+  if (/\bmap\b/.test(text)) {
+    return {
+      level: "重",
+      difficulty: "重：需地图API/地理编码/数据来源验证",
+      recommended: false,
+      reason: "地图/API/数据来源风险"
+    };
+  }
+  if (/\bupc\b/.test(text)) {
+    return {
+      level: "重",
+      difficulty: "重：需UPC编码规则和数据校验",
+      recommended: false,
+      reason: "UPC编码/校验/数据边界风险"
+    };
+  }
   if (hasAny(HEAVY_PATTERNS, text)) {
     return {
       level: "重",

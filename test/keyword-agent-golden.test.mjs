@@ -57,6 +57,15 @@ function assertExpectedFields(values, expected) {
       "判断依据/建议"
     );
   }
+  if (expected["判断依据Or建议NotIncludesAny"]) {
+    const text = `${values["判断依据"] || ""} ${values["建议"] || ""}`;
+    for (const needle of expected["判断依据Or建议NotIncludesAny"]) {
+      assert.equal(text.includes(needle), false, `判断依据/建议 should not include ${needle}; got ${text}`);
+    }
+  }
+  if (expected["评级Not"]) {
+    assert.notEqual(values["评级"], expected["评级Not"], "评级 should not match excluded value");
+  }
   if (expected["建议LengthAtMost"] !== undefined) {
     assert.ok(
       String(values["建议"] || "").length <= expected["建议LengthAtMost"],

@@ -22,6 +22,14 @@ test("keyword agent system prompt documents core judgement rules", () => {
     "signature generator、cursive generator",
     "canva qr code generator",
     "adobe qr code generator",
+    "starbucks",
+    "smartasset",
+    "dave ramsey",
+    "perchance",
+    "capcut",
+    "pregnancy calculator",
+    "paycheck calculator",
+    "best/free/review/list 型 video editor",
     "不要把 generic tool keyword 误判成品牌词",
     "只有关键词明确包含品牌信号时，才提示品牌/商标风险",
     "B端展示站",
@@ -324,6 +332,187 @@ test("validator still falls back for empty excluded rationale", () => {
 
   assert.equal(result.values["判断依据"], "LLM判定为排除，原始判断依据不足，需人工复核");
   assert.ok(result.warnings.some((item) => item.field === "判断依据"));
+});
+
+function continuedOutput(overrides = {}) {
+  return {
+    rowNumber: 200,
+    intent: "工具站",
+    firstJudgement: "继续",
+    difficulty: "轻：纯前端可做",
+    secondJudgement: "推荐",
+    monetization: "广告",
+    thirdJudgement: "推荐",
+    recommendation: "可做轻量工具页",
+    rationale: "工具需求明确，适合广告承接",
+    rating: "A",
+    ...overrides
+  };
+}
+
+function validateKeyword(keyword, llmOutput = continuedOutput()) {
+  return validateLLMOutput(
+    {
+      rowNumber: llmOutput.rowNumber || 200,
+      keyword,
+      rule: {
+        "意图": "工具站",
+        "变现渠道1": "广告",
+        "变现渠道2": "轻saas"
+      }
+    },
+    llmOutput
+  );
+}
+
+test("validator adds brand risk for newly covered brand calculator keywords", () => {
+  for (const keyword of [
+    "starbucks calorie calculator",
+    "smartasset paycheck calculator",
+    "dave ramsey mortgage calculator"
+  ]) {
+    const result = validateKeyword(keyword);
+    const text = `${result.values["建议"]} ${result.values["判断依据"]}`;
+
+    assert.match(text, /品牌|商标|误导|风险/);
+    assert.ok(result.warnings.some((item) => item.field === "品牌风险"));
+  }
+});
+
+test("validator preserves brand risk for perchance brand keywords", () => {
+  const result = validateKeyword(
+    "perchance ai story generator",
+    continuedOutput({
+      recommendation: "可做，但注意Perchance品牌/商标风险",
+      rationale: "AI故事生成器较重，且含Perchance品牌信号",
+      difficulty: "重：依赖AI生成能力",
+      secondJudgement: "不推荐",
+      rating: "B"
+    })
+  );
+
+  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|Perchance/i);
+  assert.equal(result.warnings.some((item) => item.reason.includes("非品牌关键词误含")), false);
+});
+
+test("validator rescues health education calculators from generic medical exclusion", () => {
+  const result = validateKeyword(
+    "pregnancy calculator",
+    {
+      rowNumber: 201,
+      intent: "其他",
+      firstJudgement: "排除",
+      difficulty: "",
+      secondJudgement: "",
+      monetization: "",
+      thirdJudgement: "",
+      recommendation: "",
+      rationale: "孕期健康高风险",
+      rating: ""
+    }
+  );
+
+  assert.equal(result.values["意图"], "工具站");
+  assert.equal(result.values["第一次判断"], "继续");
+  assert.equal(result.values["agent状态"], "完成");
+  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /健康教育|YMYL|免责声明|医疗建议/);
+  assert.ok(result.warnings.some((item) => item.field === "健康教育风险"));
+});
+
+test("validator adds health education disclaimer for continued calculators", () => {
+  for (const keyword of ["due date calculator", "recipe calorie calculator"]) {
+    const result = validateKeyword(keyword);
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /健康教育|YMYL|免责声明|医疗建议/);
+    assert.ok(result.warnings.some((item) => item.field === "健康教育风险"));
+  }
+});
+
+test("validator does not rescue drug dosage calculator", () => {
+  const result = validateKeyword(
+    "drug dosage calculator",
+    {
+      rowNumber: 202,
+      intent: "其他",
+      firstJudgement: "排除",
+      difficulty: "",
+      secondJudgement: "",
+      monetization: "",
+      thirdJudgement: "",
+      recommendation: "",
+      rationale: "药物剂量医疗高风险",
+      rating: ""
+    }
+  );
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+});
+
+test("validator enforces financial education disclaimers", () => {
+  for (const keyword of ["roth ira calculator", "adp paycheck calculator", "smartasset paycheck calculator", "dave ramsey mortgage calculator"]) {
+    const result = validateKeyword(keyword);
+    const text = `${result.values["建议"]} ${result.values["判断依据"]}`;
+
+    assert.match(text, /金融教育|YMYL|免责声明|财务建议|工资|税务估算|仅供参考/);
+    assert.ok(result.warnings.some((item) => item.field === "金融教育风险"));
+    if (/adp|smartasset|dave ramsey/.test(keyword)) {
+      assert.match(text, /品牌|商标|误导|风险/);
+    }
+  }
+});
+
+test("validator treats cd calculator as certificate of deposit", () => {
+  const result = validateKeyword(
+    "cd calculator",
+    continuedOutput({
+      recommendation: "可做信用额度计算器",
+      rationale: "信用额度计算需求明确"
+    })
+  );
+
+  assert.doesNotMatch(`${result.values["建议"]} ${result.values["判断依据"]}`, /信用额度/);
+  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /Certificate of Deposit|金融教育|YMYL|免责声明/);
+});
+
+test("validator still excludes investment and tax calculators", () => {
+  for (const keyword of ["investment calculator", "tax calculator"]) {
+    const result = validateKeyword(keyword);
+    assert.equal(result.values["意图"], "其他");
+    assert.equal(result.values["第一次判断"], "排除");
+    assert.equal(result.values["agent状态"], "排除");
+  }
+});
+
+test("validator downgrades AI, video, map, and UPC opportunities", () => {
+  for (const keyword of [
+    "suno ai music generator",
+    "perchance ai story generator",
+    "ai answer generator",
+    "map calculator",
+    "upc generator",
+    "online video editor"
+  ]) {
+    const result = validateKeyword(keyword);
+    const text = `${result.values["难度"]} ${result.values["判断依据"]} ${result.values["建议"]}`;
+
+    assert.notEqual(result.values["评级"], "A", keyword);
+    assert.match(text, /AI|第三方|版权|成本|地图|API|UPC|编码|校验|数据|视频编辑|重能力/);
+    assert.ok(result.warnings.some((item) => item.field === "能力风险"));
+    if (/suno|perchance/.test(keyword)) {
+      assert.match(text, /品牌|商标|误导|风险/);
+    }
+  }
+});
+
+test("validator excludes best free video editor as content intent", () => {
+  const result = validateKeyword("best free video editor");
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+  assert.match(result.values["判断依据"], /推荐|对比|不是在线工具/);
 });
 
 test("validator recomputes third judgement when monetization is not allowed", () => {

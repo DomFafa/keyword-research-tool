@@ -136,7 +136,7 @@
       "name": "cd calculator is financial education estimator",
       "keyword": "cd calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["金融教育", "估算", "YMYL", "免责声明", "财务建议"] }
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["Certificate of Deposit", "金融教育", "估算", "YMYL", "免责声明", "财务建议"] }
     },
     {
       "name": "roth ira calculator is financial education estimator",
@@ -153,6 +153,12 @@
     {
       "name": "pregnancy calculator is health education estimator",
       "keyword": "pregnancy calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["健康教育", "估算", "YMYL", "免责声明", "医疗建议"] }
+    },
+    {
+      "name": "recipe calorie calculator is health education estimator",
+      "keyword": "recipe calorie calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
       "expect": { "意图": "工具站", "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["健康教育", "估算", "YMYL", "免责声明", "医疗建议"] }
     },
@@ -221,6 +227,66 @@
       "keyword": "lastpass password generator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
       "expect": { "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "误导"] }
+    },
+    {
+      "name": "adp paycheck calculator is branded payroll education estimator",
+      "keyword": "adp paycheck calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "工资", "税务估算", "免责声明", "财务建议"] }
+    },
+    {
+      "name": "smartasset paycheck calculator is branded payroll education estimator",
+      "keyword": "smartasset paycheck calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "工资", "税务估算", "免责声明", "财务建议"] }
+    },
+    {
+      "name": "dave ramsey mortgage calculator is branded financial estimator",
+      "keyword": "dave ramsey mortgage calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "金融教育", "YMYL", "免责声明", "财务建议"] }
+    },
+    {
+      "name": "suno ai music generator is branded heavy AI opportunity",
+      "keyword": "suno ai music generator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "AI", "第三方", "版权", "成本"] }
+    },
+    {
+      "name": "perchance ai story generator is branded heavy AI opportunity",
+      "keyword": "perchance ai story generator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "AI", "第三方", "版权", "成本"] }
+    },
+    {
+      "name": "map calculator is data/API risk opportunity",
+      "keyword": "map calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["地图", "API", "数据"] }
+    },
+    {
+      "name": "upc generator is data validation risk opportunity",
+      "keyword": "upc generator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["UPC", "编码", "校验", "数据"] }
+    },
+    {
+      "name": "online video editor is heavy capability opportunity",
+      "keyword": "online video editor",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["视频", "第三方", "版权", "成本", "重"] }
+    },
+    {
+      "name": "best free video editor is comparison content intent",
+      "keyword": "best free video editor",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["推荐", "对比", "内容意图"] }
+    },
+    {
+      "name": "signature generator remains generic tool without brand risk",
+      "keyword": "signature generator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
+      "expect": { "第一次判断": "继续", "agent状态": "完成", "判断依据Or建议NotIncludesAny": ["品牌", "商标"] }
     },
     {
       "name": "gaming microphone manufacturer is B2B showcase",
