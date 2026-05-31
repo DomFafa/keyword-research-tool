@@ -190,6 +190,142 @@ test("validator normalizes continued rows into legal sheet fields", () => {
   assert.ok(result.warnings.length > 0);
 });
 
+test("validator cleans brand risk text for generic signature generator", () => {
+  const result = validateLLMOutput(
+    {
+      rowNumber: 17,
+      keyword: "signature generator",
+      rule: {
+        "意图": "工具站",
+        "变现渠道1": "广告",
+        "变现渠道2": "轻saas"
+      }
+    },
+    {
+      rowNumber: 17,
+      intent: "工具站",
+      firstJudgement: "继续",
+      difficulty: "轻：纯前端可做",
+      secondJudgement: "推荐",
+      monetization: "广告",
+      thirdJudgement: "推荐",
+      recommendation: "可做；注意品牌/同名站竞争风险",
+      rationale: "真实工具意图明确，技术轻；存在同名站与品牌/商标混淆风险",
+      rating: "A"
+    }
+  );
+
+  const blocked = /品牌|商标|同名站|brand|trademark/i;
+  assert.doesNotMatch(result.values["建议"], blocked);
+  assert.doesNotMatch(result.values["判断依据"], blocked);
+  assert.ok(result.values["建议"]);
+  assert.ok(result.values["判断依据"]);
+  assert.ok(result.warnings.some((item) => item.field === "品牌风险"));
+});
+
+test("validator keeps brand risk text for explicit Canva brand keywords", () => {
+  const result = validateLLMOutput(
+    {
+      rowNumber: 25,
+      keyword: "canva qr code generator",
+      rule: {
+        "意图": "工具站",
+        "变现渠道1": "广告"
+      }
+    },
+    {
+      rowNumber: 25,
+      intent: "工具站",
+      firstJudgement: "继续",
+      difficulty: "轻：纯前端可做",
+      secondJudgement: "推荐",
+      monetization: "广告",
+      thirdJudgement: "推荐",
+      recommendation: "可做，但需注意Canva品牌/商标风险",
+      rationale: "关键词含Canva品牌，需避免商标误导",
+      rating: "A"
+    }
+  );
+
+  assert.match(result.values["建议"], /品牌|商标/);
+  assert.match(result.values["判断依据"], /品牌|商标/);
+  assert.equal(result.warnings.some((item) => item.field === "品牌风险"), false);
+});
+
+test("validator keeps brand risk text for explicit Adobe brand keywords", () => {
+  const result = validateLLMOutput(
+    {
+      rowNumber: 23,
+      keyword: "adobe qr code generator",
+      rule: {
+        "意图": "工具站",
+        "变现渠道1": "广告"
+      }
+    },
+    {
+      rowNumber: 23,
+      intent: "工具站",
+      firstJudgement: "继续",
+      difficulty: "轻：纯前端可做",
+      secondJudgement: "推荐",
+      monetization: "广告",
+      thirdJudgement: "推荐",
+      recommendation: "可做，但需注意Adobe品牌/商标风险",
+      rationale: "关键词含Adobe品牌，需避免商标误导",
+      rating: "A"
+    }
+  );
+
+  assert.match(result.values["建议"], /品牌|商标/);
+  assert.match(result.values["判断依据"], /品牌|商标/);
+  assert.equal(result.warnings.some((item) => item.field === "品牌风险"), false);
+});
+
+test("validator keeps short but useful excluded rationale", () => {
+  const result = validateLLMOutput(
+    { rowNumber: 22, keyword: "solar generator" },
+    {
+      rowNumber: 22,
+      intent: "其他",
+      firstJudgement: "排除",
+      difficulty: "",
+      secondJudgement: "",
+      monetization: "",
+      thirdJudgement: "",
+      recommendation: "",
+      rationale: "这是实体发电机购买词，不是在线工具意图",
+      rating: ""
+    },
+    { desiredIntent: "工具站", allowedMonetizationChannels: ["广告"] }
+  );
+
+  assert.match(result.values["判断依据"], /实体发电机|购买词|不是在线工具/);
+  assert.notEqual(result.values["判断依据"], "LLM判定为排除，原始判断依据不足，需人工复核");
+  assert.equal(result.warnings.some((item) => item.reason.includes("判断依据缺失或过短")), false);
+});
+
+test("validator still falls back for empty excluded rationale", () => {
+  const result = validateLLMOutput(
+    { rowNumber: 21, keyword: "honda generator" },
+    {
+      rowNumber: 21,
+      intent: "其他",
+      firstJudgement: "排除",
+      difficulty: "",
+      secondJudgement: "",
+      monetization: "",
+      thirdJudgement: "",
+      recommendation: "",
+      rationale: "",
+      rating: ""
+    },
+    { desiredIntent: "工具站", allowedMonetizationChannels: ["广告"] }
+  );
+
+  assert.equal(result.values["判断依据"], "LLM判定为排除，原始判断依据不足，需人工复核");
+  assert.ok(result.warnings.some((item) => item.field === "判断依据"));
+});
+
 test("validator recomputes third judgement when monetization is not allowed", () => {
   const result = validateLLMOutput(
     { rowNumber: 33 },

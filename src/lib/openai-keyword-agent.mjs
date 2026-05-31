@@ -73,7 +73,7 @@ monetization 只能是 广告 / 轻saas / 其他。
 firstJudgement=排除 时 rating 必须为空字符串。
 
 排除行：
-如果 firstJudgement=排除：intent=其他，difficulty=""，secondJudgement=""，monetization=""，thirdJudgement=""，recommendation=""，rating=""，rationale 写 20-80 字中文原因。
+如果 firstJudgement=排除：intent=其他，difficulty=""，secondJudgement=""，monetization=""，thirdJudgement=""，recommendation=""，rating=""，rationale 写 8-80 字中文原因。
 
 输出风格：
 只返回 JSON Schema 要求的 JSON。不要输出 Markdown。recommendation 中文，50字以内。rationale 中文，80字以内。
@@ -84,6 +84,25 @@ const VALID_JUDGEMENTS = ["推荐", "不推荐"];
 const VALID_RATINGS = ["A", "B", "C"];
 const DEFAULT_EXCLUDED_RATIONALE = "LLM判定为排除，原始判断依据不足，需人工复核";
 const DEFAULT_CONTINUE_RATIONALE = "LLM判断依据不足，已按客户配置完成字段兜底";
+const EXPLICIT_BRAND_KEYWORDS = [
+  "adobe",
+  "canva",
+  "chipotle",
+  "desmos",
+  "lastpass",
+  "norton",
+  "adp",
+  "scribbr",
+  "chatgpt",
+  "gemini",
+  "runway",
+  "suno",
+  "perplexity",
+  "generac",
+  "honda",
+  "jackery"
+];
+const BRAND_RISK_PATTERN = /品牌|商标|误导|同名站|截流|brand|trademark/i;
 
 const OUTPUT_SCHEMA = {
   name: "keyword_agent_batch_decision",
@@ -173,6 +192,44 @@ function customerConfigFromRule(rule) {
     desiredIntent: desiredIntent(rule),
     allowedMonetizationChannels: normalizeAllowedChannels(channelsFromRule(rule))
   };
+}
+
+export function normalizeKeywordForBrand(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function hasExplicitBrandSignal(keyword) {
+  const normalized = normalizeKeywordForBrand(keyword);
+  return EXPLICIT_BRAND_KEYWORDS.some((brand) => new RegExp(`(^| )${brand}( |$)`).test(normalized));
+}
+
+export function containsBrandRiskText(text) {
+  return BRAND_RISK_PATTERN.test(String(text || ""));
+}
+
+export function cleanupGenericBrandRiskText(text, fallback) {
+  const cleaned = String(text || "")
+    .split(/[；;。.]/)
+    .map((part) => part.trim())
+    .filter((part) => part && !containsBrandRiskText(part))
+    .join("；")
+    .trim();
+  return cleaned.length >= 4 ? cleaned : fallback;
+}
+
+function keywordFromRow(row, decision) {
+  return String(
+    row?.keyword ||
+    row?.keywordRecord?.["关键词"] ||
+    row?.record?.["关键词"] ||
+    decision?.keyword ||
+    ""
+  ).trim();
 }
 
 function normalizeCustomerConfig(row, customerConfig = {}) {
@@ -302,7 +359,7 @@ export function buildPromptPayload(items) {
       saasSignals: "轻saas requires subscription reasons like saved history, batch processing, export PDF/CSV/image, team collaboration, API, advanced templates/parameters, or professional workflow.",
       thirdJudgement: "If monetization is not in customerConfig.allowedMonetizationChannels, thirdJudgement=不推荐. If monetization=其他, default 不推荐. Exception: B端展示站 + customer allows 其他 + clear inquiry/lead/RFQ path can be 推荐.",
       research: "research is read-only auxiliary context, not the final answer. If research shows official brand-tool dominance, mention brand/trademark risk. If research shows SERP is mostly physical products or purchase intent, exclude the row. If research is missing or skipped, do not invent external facts. Do not cite sources that are not present in research. Final output must still follow the JSON Schema and validator rules.",
-      excludedRows: "If firstJudgement=排除, set intent=其他 and set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale must be a 20-80 Chinese character reason.",
+      excludedRows: "If firstJudgement=排除, set intent=其他 and set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale must be an 8-80 Chinese character reason.",
       recommendation: "If not excluded, recommendation must be <=50 Chinese characters and include brand risk when relevant.",
       rationale: "rationale must be <=80 Chinese characters.",
       rating: "Do not improvise. Only if not excluded: secondJudgement=推荐 + thirdJudgement=推荐 => A; secondJudgement=不推荐 + thirdJudgement=不推荐 => C; otherwise B. If firstJudgement=排除, rating must be an empty string."
@@ -355,7 +412,7 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     const rationale = correctedRationale({
       value: decision.rationale,
       fallback: DEFAULT_EXCLUDED_RATIONALE,
-      minLength: 20,
+      minLength: 8,
       maxLength: 80,
       warnings
     });
@@ -416,12 +473,30 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     warning(warnings, "评级", "评级必须由第二次判断和第三次判断重算", decision.rating, rating);
   }
 
-  const rationale = correctedRationale({
+  let rationale = correctedRationale({
     value: decision.rationale,
     fallback: DEFAULT_CONTINUE_RATIONALE,
     maxLength: 80,
     warnings
   });
+  let recommendation = correctedRecommendation(decision.recommendation, warnings);
+  const keyword = keywordFromRow(row, decision);
+  if (
+    !hasExplicitBrandSignal(keyword) &&
+    (containsBrandRiskText(recommendation) || containsBrandRiskText(rationale))
+  ) {
+    const beforeRecommendation = recommendation;
+    const beforeRationale = rationale;
+    recommendation = cleanupGenericBrandRiskText(recommendation, "可做轻量工具页，避免夸大功能");
+    rationale = cleanupGenericBrandRiskText(rationale, "真实工具意图明确，技术轻");
+    warning(
+      warnings,
+      "品牌风险",
+      "非品牌关键词误含品牌/商标风险，已清理",
+      `${beforeRecommendation} | ${beforeRationale}`,
+      `${recommendation} | ${rationale}`
+    );
+  }
 
   return {
     rowNumber: outputRowNumber,
@@ -432,7 +507,7 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
       "第二次判断": secondJudgement,
       "变现渠道": monetization,
       "第三次判断": thirdJudgement,
-      "建议": correctedRecommendation(decision.recommendation, warnings),
+      "建议": recommendation,
       "判断依据": rationale,
       "评级": rating,
       [AGENT_STATUS_COLUMN]: "完成"
