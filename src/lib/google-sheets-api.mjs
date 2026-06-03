@@ -198,6 +198,29 @@ export async function updateSheetValues({
   };
 }
 
+export async function batchUpdateSheetValues({
+  sheetUrl,
+  data,
+  valueInputOption = "USER_ENTERED",
+  keyPath = ""
+}) {
+  const result = await sheetsApiFetch({
+    sheetUrl,
+    keyPath,
+    method: "POST",
+    path: "/values:batchUpdate",
+    body: { valueInputOption, data }
+  });
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    ...result.data,
+    clientEmail: result.clientEmail
+  };
+}
+
 export async function clearSheetValues({ sheetUrl, range, keyPath = "" }) {
   const result = await sheetsApiFetch({
     sheetUrl,
