@@ -97,6 +97,12 @@
       "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["日期时间", "AI直接满足"] }
     },
     {
+      "name": "calendar calculator is date arithmetic",
+      "keyword": "calendar calculator",
+      "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["日期时间", "AI直接满足"] }
+    },
+    {
       "name": "401k calculator is financial education estimator",
       "keyword": "401k calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
@@ -166,37 +172,37 @@
       "name": "tax calculator is tax risk",
       "keyword": "tax calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["法律税务", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["法律税务", "排除项"] }
     },
     {
       "name": "stock calculator is investment risk",
       "keyword": "stock calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "排除项"] }
     },
     {
       "name": "crypto calculator is investment risk",
       "keyword": "crypto calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "排除项"] }
     },
     {
       "name": "forex trading calculator is investment risk",
       "keyword": "forex trading calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "排除项"] }
     },
     {
       "name": "option profit calculator is investment risk",
       "keyword": "option profit calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "排除项"] }
     },
     {
       "name": "investment calculator is investment risk",
       "keyword": "investment calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "", "能力1": "工具站", "能力2": "" },
-      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "投资建议", "高风险"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["金融投资", "排除项"] }
     },
     {
       "name": "canva qr code generator is brand tool",
@@ -220,7 +226,7 @@
       "name": "desmos graphing calculator is brand tool even if heavy",
       "keyword": "desmos graphing calculator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
-      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "误导"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["品牌/版权风险", "降级排除"] }
     },
     {
       "name": "lastpass password generator is brand tool",
@@ -250,13 +256,13 @@
       "name": "suno ai music generator is branded heavy AI opportunity",
       "keyword": "suno ai music generator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
-      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "AI", "第三方", "版权", "成本"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["品牌/版权风险", "降级排除"] }
     },
     {
       "name": "perchance ai story generator is branded heavy AI opportunity",
       "keyword": "perchance ai story generator",
       "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "轻saas", "能力1": "工具站", "能力2": "" },
-      "expect": { "第一次判断": "继续", "第二次判断": "不推荐", "评级Not": "A", "agent状态": "完成", "判断依据Or建议IncludesAny": ["品牌", "商标", "风险", "AI", "第三方", "版权", "成本"] }
+      "expect": { "意图": "其他", "第一次判断": "排除", "agent状态": "排除", "判断依据IncludesAny": ["品牌/版权风险", "降级排除"] }
     },
     {
       "name": "map calculator is data/API risk opportunity",
@@ -330,7 +336,7 @@
       "name": "validator rejects monetization not allowed by customer",
       "row": { "rowNumber": 101, "rule": { "意图": "工具站", "变现渠道1": "广告", "变现渠道2": "" } },
       "llmOutput": { "rowNumber": 101, "intent": "工具站", "firstJudgement": "继续", "difficulty": "轻：纯前端可做", "secondJudgement": "推荐", "monetization": "轻saas", "thirdJudgement": "推荐", "recommendation": "做免费入口导出付费", "rationale": "有导出订阅理由但客户未允许该渠道", "rating": "A" },
-      "expect": { "第三次判断": "不推荐", "评级": "B", "agent状态": "完成", "warningsIncludesAny": ["第三次判断", "评级"] }
+      "expect": { "第三次判断": "不推荐", "评级": "A", "agent状态": "完成", "warningsIncludesAny": ["第三次判断"] }
     },
     {
       "name": "validator corrects illegal intent",

@@ -33,8 +33,11 @@ B端展示站定义：
 用户在找供应商、厂家、OEM/ODM、批发、企业服务、报价、RFQ、行业解决方案。
 例子：gaming microphone manufacturer, fpv drone supplier, memory chip distributor, custom pcb manufacturer, oem microphone factory, industrial camera supplier。
 
-硬排除：
-以下 firstJudgement=排除：成人/NSFW、赌博/博彩、破解/盗版/绕过付费、医疗诊断或药物剂量、法律/税务高风险、tax calculator、IRS、lawyer、lawsuit、stock、crypto、forex、trading、investment、option profit、day trading、单位换算如 cm to inches、货币换算如 usd to cny、简单数学如 percentage calculator、日期时间简单计算如 days between dates calculator、实体商品、购买、价格、manual、parts、repair、installation、本地服务、招聘、工资、职位类关键词。
+直接排除：
+以下 firstJudgement=排除：成人/NSFW、赌博/博彩、破解/盗版/绕过付费、医疗诊断或药物剂量、单位换算如 cm to inches、货币换算如 usd to cny、简单数学如 percentage calculator、日期时间简单计算如 days between dates calculator/date calculator/calendar calculator、实体商品、购买、价格、manual、parts、repair、installation、本地服务、招聘、工资、职位类关键词、best/free/review/list 型 video editor 推荐/对比内容意图。
+
+软排除项：
+法律/税务高风险、tax calculator、IRS、lawyer、lawsuit、stock、crypto、forex、trading、investment、option profit、day trading 不直接按普通难度评级；只有 difficulty 轻开头时评级固定为 C。如果 difficulty 中/重开头，则排除。如果同时涉及品牌、商标、版权或官方授权风险，也从 C 降级为排除。
 
 健康教育估算器例外：
 pregnancy calculator、due date calculator、pregnancy due date calculator、ivf due date calculator、ovulation calculator、conception calculator、BMI/body fat/calorie/recipe calorie/TDEE calculator 可以继续。
@@ -42,7 +45,7 @@ pregnancy calculator、due date calculator、pregnancy due date calculator、ivf
 
 金融教育估算器例外：
 不要把 401k calculator、401(k) calculator、retirement calculator、mortgage calculator、loan calculator、compound interest calculator、savings calculator、debt payoff calculator、cd calculator、certificate of deposit calculator、roth ira calculator、ira calculator、paycheck calculator、salary paycheck calculator 一刀切排除。
-这些可以继续，但必须只定位为教育估算器，不提供财务/税务建议，并在 recommendation 或 rationale 中提示 YMYL / 教育估算 / 免责声明 / 避免财务建议。investment/stock/crypto/forex/trading/tax 仍排除。
+这些可以继续，但必须只定位为教育估算器，不提供财务/税务建议，并在 recommendation 或 rationale 中提示 YMYL / 教育估算 / 免责声明 / 避免财务建议。investment/stock/crypto/forex/trading/tax 属软排除项；轻难度固定 C，中/重难度排除，叠加品牌/版权/官方授权风险也排除。
 
 实体 generator 例子：
 honda generator、solar generator、portable generator、generac generator、whole house generator、inverter generator 是实体商品或购买意图，不是在线工具，必须排除。
@@ -74,7 +77,9 @@ monetization 只能是 广告 / 轻saas / 其他。
 如果 monetization=其他，默认不推荐。但 B端展示站 + 客户允许 其他 + 有清晰询盘/线索路径时，可以推荐。
 
 评级：
-不要自由发挥。只按 secondJudgement=推荐 + thirdJudgement=推荐 => A；secondJudgement=不推荐 + thirdJudgement=不推荐 => C；其他 => B。
+不要自由发挥。基础评级只看 difficulty：轻开头 => A；中开头 => B；重开头 => C。
+如果属于软排除项，只有轻难度固定 C，中/重难度排除。其他行基础评级只看 difficulty：轻开头 => A；中开头 => B；重开头 => C。
+如果 recommendation/rationale/keyword 中涉及品牌、商标、版权或官方授权风险，则降一级：A=>B，B=>C，C=>排除。
 firstJudgement=排除 时 rating 必须为空字符串。
 
 排除行：
@@ -269,6 +274,41 @@ function isHardFinancialOrTaxKeyword(keyword) {
   return /\b(investment|stock|crypto|forex|trading|option\s+profit|tax|irs)\b/.test(keyword);
 }
 
+function isSimpleAiReplacedKeyword(keyword) {
+  return /\b(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\s+to\s+(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\b/.test(keyword) ||
+    /\b(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\s+to\s+(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\b|\bcurrency\s+(converter|calculator)\b|\bexchange\s+rate\b/.test(keyword) ||
+    /\b(percent|percentage)\b/.test(keyword) ||
+    /\b(days?\s+between|date\s+calculator|calendar\s+calculator|time\s+duration|hours?\s+calculator|minutes?\s+calculator)\b/.test(keyword);
+}
+
+function isPhysicalProductKeyword(keyword) {
+  return /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/.test(keyword) ||
+    /\b(for\s+sale|price|manual|parts|repair|installation|local\s+service)\b/.test(keyword);
+}
+
+function isJobSalaryKeyword(keyword) {
+  if (isPaycheckCalculator(keyword)) {
+    return false;
+  }
+  return /\b(jobs?|careers?|salary|salaries|positions?|hiring|recruit(?:ing|ment)?)\b/.test(keyword);
+}
+
+function directExclusionReason(keyword) {
+  if (isSimpleAiReplacedKeyword(keyword)) return "简单直答/换算/日期时间计算，可被搜索或AI直接满足";
+  if (/\b(porn|porno|nsfw|adult|nude|xxx|hentai|erotic|sex)\b/.test(keyword)) return "成人敏感内容，直接排除";
+  if (/\b(casino|slots?|sportsbook|betting|gambling|lottery|poker)\b/.test(keyword)) return "赌博博彩内容，直接排除";
+  if (/\b(cracks?|cracked|torrent|pirate|mod\s*apk|keygen|activation|bypass|unlocker?)\b/.test(keyword)) return "破解盗版或绕过付费内容，直接排除";
+  if (isHardMedicalKeyword(keyword)) return "医疗诊断或药物剂量高风险，直接排除";
+  if (isPhysicalProductKeyword(keyword)) return "实体商品/购买/维修安装意图，不是在线工具需求";
+  if (isContentRecommendationIntent(keyword)) return "真实意图是推荐/对比内容，不是在线工具需求";
+  if (isJobSalaryKeyword(keyword)) return "招聘/工资/职位类关键词，直接排除";
+  return "";
+}
+
+function isSoftExclusionKeyword(keyword) {
+  return isHardFinancialOrTaxKeyword(keyword);
+}
+
 function isFinancialEducationCalculator(keyword) {
   return /\b(401\s*k|401k|retirement|mortgage|loan|compound\s+interest|savings|debt\s+payoff|cd|certificate\s+of\s+deposit|roth\s+ira|ira|paycheck|salary\s+paycheck)\s+calculator\b/.test(keyword) && !isHardFinancialOrTaxKeyword(keyword);
 }
@@ -409,14 +449,35 @@ function normalizedDifficulty(value, warnings) {
   return fallback;
 }
 
-function computeRating(secondJudgement, thirdJudgement) {
-  if (secondJudgement === "推荐" && thirdJudgement === "推荐") {
-    return "A";
-  }
-  if (secondJudgement === "不推荐" && thirdJudgement === "不推荐") {
-    return "C";
-  }
+function baseRatingFromDifficulty(difficulty) {
+  const text = String(difficulty || "").trim();
+  if (text.startsWith("轻")) return "A";
+  if (text.startsWith("中")) return "B";
+  if (text.startsWith("重")) return "C";
   return "B";
+}
+
+function containsCopyrightRiskText(text) {
+  return /版权|授权|官方|copyright|license|licensing|official/i.test(String(text || ""));
+}
+
+function hasBrandOrCopyrightRisk({ keyword = "", recommendation = "", rationale = "", monetization = "", difficulty = "" } = {}) {
+  const text = [recommendation, rationale, monetization, difficulty].join(" ");
+  return hasExplicitBrandSignal(keyword) || containsBrandRiskText(text) || containsCopyrightRiskText(text);
+}
+
+function downgradeRatingForRisk(rating) {
+  if (rating === "A") return "B";
+  if (rating === "B") return "C";
+  if (rating === "C") return "排除";
+  return rating;
+}
+
+function computeRating(difficulty, riskContext = {}) {
+  const baseRating = riskContext.softExclusion
+    ? String(difficulty || "").trim().startsWith("轻") ? "C" : "排除"
+    : baseRatingFromDifficulty(difficulty);
+  return hasBrandOrCopyrightRisk(riskContext) ? downgradeRatingForRisk(baseRating) : baseRating;
 }
 
 function rowNumberFor(row, llmOutput) {
@@ -439,18 +500,17 @@ export function buildPromptPayload(items) {
         "gambling/betting",
         "cracking/piracy/bypass paid products",
         "medical diagnosis or drug/dosage advice",
-        "legal/tax high-risk advice including tax calculator, IRS, lawyer, lawsuit",
-        "financial investment/trading advice including stock, crypto, forex, trading, investment, option profit, day trading",
-        "simple unit conversion such as cm to inches, currency conversion such as usd to cny, percentage math such as percentage calculator, or date/time arithmetic such as days between dates calculator",
+        "simple unit conversion such as cm to inches, currency conversion such as usd to cny, percentage math such as percentage calculator, or date/time arithmetic such as days between dates calculator/date calculator/calendar calculator",
         "physical products, purchase, price, manual, parts, repair, installation, local services, jobs, salary, position keywords"
       ],
+      softExclusion: "Legal/tax high-risk and financial investment/trading keywords such as tax calculator, IRS, lawyer, lawsuit, stock, crypto, forex, trading, investment, option profit, and day trading are soft exclusion items: if difficulty starts with 轻, set rating=C; if difficulty starts with 中 or 重, exclude; if brand/trademark/copyright/authorization risk also appears, exclude.",
       healthEducationException: [
         "Do not hard-exclude pregnancy calculator, due date calculator, pregnancy due date calculator, IVF due date calculator, ovulation calculator, conception calculator, BMI calculator, body fat calculator, calorie calculator, recipe calorie calculator, or TDEE calculator.",
         "These may continue only as health education estimators. Recommendation/rationale must mention YMYL, disclaimer, education-only estimate, or avoiding medical advice. Drug/dosage/diagnosis/symptom calculators remain excluded."
       ],
       financialEducationException: [
         "Do not hard-exclude 401k calculator, 401(k) calculator, retirement calculator, mortgage calculator, loan calculator, compound interest calculator, savings calculator, debt payoff calculator, cd calculator, certificate of deposit calculator, Roth IRA calculator, IRA calculator, paycheck calculator, or salary paycheck calculator.",
-        "These may continue as education-only estimators, but recommendation/rationale must mention YMYL, education estimate, disclaimer, or avoiding financial/tax advice. CD calculator means Certificate of Deposit calculator, not credit limit. Investment/stock/crypto/forex/trading/tax calculators remain excluded."
+        "These may continue as education-only estimators, but recommendation/rationale must mention YMYL, education estimate, disclaimer, or avoiding financial/tax advice. CD calculator means Certificate of Deposit calculator, not credit limit. Investment/stock/crypto/forex/trading/tax calculators are soft exclusion items: light difficulty => C; medium/heavy difficulty or brand/copyright risk => excluded."
       ],
       semanticWarnings: [
         "Do not classify by suffix alone. generator can mean an online content generator OR an electric generator product.",
@@ -468,7 +528,7 @@ export function buildPromptPayload(items) {
       excludedRows: "If firstJudgement=排除, set intent=其他 and set difficulty, secondJudgement, monetization, thirdJudgement, recommendation, rating to empty strings. rationale must be an 8-80 Chinese character reason.",
       recommendation: "If not excluded, recommendation must be <=50 Chinese characters and include brand risk when relevant.",
       rationale: "rationale must be <=80 Chinese characters.",
-      rating: "Do not improvise. Only if not excluded: secondJudgement=推荐 + thirdJudgement=推荐 => A; secondJudgement=不推荐 + thirdJudgement=不推荐 => C; otherwise B. If firstJudgement=排除, rating must be an empty string."
+      rating: "Do not improvise. Direct exclusion items must be excluded. Soft exclusion items are C only when difficulty starts with 轻; if soft exclusion difficulty starts with 中 or 重, exclude. Other non-excluded rows: difficulty starting with 轻 => A, 中 => B, 重 => C. If brand/trademark/copyright/authorization risk is present, downgrade one level: A=>B, B=>C, C=>排除. If firstJudgement=排除, rating must be an empty string."
     },
     rows: items.map((item) => ({
       rowNumber: item.rowNumber,
@@ -516,6 +576,8 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
   const firstJudgement = decision.firstJudgement === "继续" && intent !== "其他" ? "继续" : "排除";
   const excluded = firstJudgement === "排除";
   const healthEducation = isHealthEducationCalculator(keyword) && !isHardMedicalKeyword(keyword);
+  const directReason = healthEducation ? "" : directExclusionReason(keyword);
+  const softExclusion = !directReason && isSoftExclusionKeyword(keyword);
   if (excluded && healthEducation && isGenericHealthExclusion(decision.rationale)) {
     const monetization = config.allowedMonetizationChannels.includes("广告") || config.allowedMonetizationChannels.length === 0
       ? "广告"
@@ -544,7 +606,64 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
         "第三次判断": thirdJudgement,
         "建议": "做健康教育估算器，强化免责声明",
         "判断依据": "健康教育估算/YMYL，仅作教育用途，避免医疗建议",
-        "评级": computeRating(secondJudgement, thirdJudgement),
+        "评级": computeRating("中：需谨慎设计假设和免责声明", {
+          keyword,
+          recommendation: "做健康教育估算器，强化免责声明",
+          rationale: "健康教育估算/YMYL，仅作教育用途，避免医疗建议"
+        }),
+        [AGENT_STATUS_COLUMN]: "完成"
+      },
+      modelRationale: String(decision.rationale || "").trim(),
+      warnings
+    };
+  }
+
+  if (excluded && softExclusion) {
+    const difficulty = /^[轻中重]：.+/.test(String(decision.difficulty || "").trim())
+      ? String(decision.difficulty || "").trim()
+      : "重：软排除项缺少轻难度依据";
+    const recommendation = "仅作人工复核，不建议优先做";
+    const rationale = difficulty.startsWith("轻")
+      ? "法律税务或金融投资软排除项，轻难度固定评级C"
+      : "法律税务或金融投资软排除项，中重难度排除";
+    const rating = computeRating(difficulty, {
+      keyword,
+      recommendation,
+      rationale,
+      softExclusion: true
+    });
+    warning(
+      warnings,
+      "排除项评级",
+      difficulty.startsWith("轻") ? "轻难度软排除项固定评级C" : "中/重难度软排除项已排除",
+      decision.rationale,
+      rationale
+    );
+    if (rating === "排除") {
+      return {
+        rowNumber: outputRowNumber,
+        values: {
+          "意图": "其他",
+          "第一次判断": "排除",
+          "判断依据": appendLimited(rationale, "排除项中重难度或品牌/版权风险叠加，降级排除", 80),
+          [AGENT_STATUS_COLUMN]: "排除"
+        },
+        modelRationale: String(decision.rationale || "").trim(),
+        warnings
+      };
+    }
+    return {
+      rowNumber: outputRowNumber,
+      values: {
+        "意图": config.desiredIntent,
+        "第一次判断": "继续",
+        "难度": difficulty,
+        "第二次判断": "不推荐",
+        "变现渠道": "其他",
+        "第三次判断": "不推荐",
+        "建议": recommendation,
+        "判断依据": rationale,
+        "评级": rating,
         [AGENT_STATUS_COLUMN]: "完成"
       },
       modelRationale: String(decision.rationale || "").trim(),
@@ -572,37 +691,14 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
       warnings
     };
   }
-  if (isHardFinancialOrTaxKeyword(keyword) || isHardMedicalKeyword(keyword)) {
-    const reason = isHardFinancialOrTaxKeyword(keyword)
-      ? "金融投资/税务高风险，不适合工具站直接承接"
-      : "医疗诊断或药物剂量高风险，不能做普通工具站";
-    warning(warnings, "硬排除", "高风险关键词被误判继续，已排除", decision.rationale, reason);
+  if (directReason) {
+    warning(warnings, "直接排除", "直接排除项被误判继续，已排除", decision.rationale, directReason);
     return {
       rowNumber: outputRowNumber,
       values: {
         "意图": "其他",
         "第一次判断": "排除",
-        "判断依据": reason,
-        [AGENT_STATUS_COLUMN]: "排除"
-      },
-      modelRationale: String(decision.rationale || "").trim(),
-      warnings
-    };
-  }
-  if (isContentRecommendationIntent(keyword)) {
-    warning(
-      warnings,
-      "真实意图",
-      "推荐/对比内容意图不是在线工具需求，已排除",
-      decision.rationale,
-      "真实意图是推荐/对比内容，不是在线工具需求"
-    );
-    return {
-      rowNumber: outputRowNumber,
-      values: {
-        "意图": "其他",
-        "第一次判断": "排除",
-        "判断依据": "真实意图是推荐/对比内容，不是在线工具需求",
+        "判断依据": directReason,
         [AGENT_STATUS_COLUMN]: "排除"
       },
       modelRationale: String(decision.rationale || "").trim(),
@@ -656,6 +752,27 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     warnings
   });
   let recommendation = correctedRecommendation(decision.recommendation, warnings);
+
+  if (softExclusion) {
+    const before = { difficulty, secondJudgement, monetization, thirdJudgement, rationale };
+    secondJudgement = "不推荐";
+    monetization = "其他";
+    thirdJudgement = "不推荐";
+    rationale = appendLimited(
+      rationale,
+      difficulty.startsWith("轻")
+        ? "法律税务或金融投资软排除项，轻难度固定评级C"
+        : "法律税务或金融投资软排除项，中重难度排除",
+      80
+    );
+    warning(
+      warnings,
+      "排除项评级",
+      difficulty.startsWith("轻") ? "轻难度软排除项固定评级C" : "中/重难度软排除项已排除",
+      JSON.stringify(before),
+      JSON.stringify({ difficulty, secondJudgement, monetization, thirdJudgement, rationale })
+    );
+  }
 
   const financialEducation = isFinancialEducationCalculator(keyword);
   if (financialEducation) {
@@ -750,9 +867,41 @@ export function validateLLMOutput(row, llmOutput, customerConfig = {}) {
     );
   }
 
-  const rating = computeRating(secondJudgement, thirdJudgement);
+  const rating = computeRating(difficulty, {
+    keyword,
+    recommendation,
+    rationale,
+    monetization,
+    difficulty,
+    softExclusion
+  });
+  if (rating === "排除") {
+    const excludedRationale = appendLimited(
+      rationale,
+      softExclusion ? "排除项中重难度或品牌/版权风险叠加，降级排除" : "品牌/版权风险叠加重难度，降级排除",
+      80
+    );
+    warning(
+      warnings,
+      "评级",
+      softExclusion ? "软排除项中重难度或叠加品牌/版权风险，已排除" : "重难度且涉及品牌/版权风险，已从C降级为排除",
+      decision.rating,
+      "排除"
+    );
+    return {
+      rowNumber: outputRowNumber,
+      values: {
+        "意图": "其他",
+        "第一次判断": "排除",
+        "判断依据": excludedRationale,
+        [AGENT_STATUS_COLUMN]: "排除"
+      },
+      modelRationale: String(decision.rationale || "").trim(),
+      warnings
+    };
+  }
   if (!VALID_RATINGS.includes(decision.rating) || decision.rating !== rating) {
-    warning(warnings, "评级", "评级必须由第二次判断和第三次判断重算", decision.rating, rating);
+    warning(warnings, "评级", "评级必须由难度并结合品牌/版权风险重算", decision.rating, rating);
   }
 
   return {

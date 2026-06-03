@@ -34,6 +34,9 @@ test("keyword agent system prompt documents core judgement rules", () => {
     "只有关键词明确包含品牌信号时，才提示品牌/商标风险",
     "B端展示站",
     "询盘/线索",
+    "轻开头 => A",
+    "软排除项",
+    "A=>B，B=>C，C=>排除",
     "firstJudgement=排除 时 rating 必须为空"
   ]) {
     assert.match(KEYWORD_AGENT_SYSTEM_PROMPT, new RegExp(expected.replace(/[()+]/g, "\\$&")));
@@ -63,6 +66,9 @@ test("keyword agent prompt payload documents prefiltered rows and semantic rules
   assert.match(rulesText, /Only mention brand\/trademark risk when the keyword explicitly contains a brand signal/);
   assert.match(rulesText, /signature generator.*not brand keywords|signature generator.*brand/);
   assert.match(rulesText, /Canva QR code generator|Adobe QR code generator/);
+  assert.match(rulesText, /difficulty starting with 轻 => A/);
+  assert.match(rulesText, /Soft exclusion items|fixed at C|软排除/);
+  assert.match(rulesText, /A=>B, B=>C, C=>排除/);
   assert.equal(payload.rows[0].customerConfig.desiredIntent, "B端展示站");
   assert.deepEqual(payload.rows[0].customerConfig.allowedMonetizationChannels, ["其他"]);
 });
@@ -257,6 +263,7 @@ test("validator keeps brand risk text for explicit Canva brand keywords", () => 
 
   assert.match(result.values["建议"], /品牌|商标/);
   assert.match(result.values["判断依据"], /品牌|商标/);
+  assert.equal(result.values["评级"], "B");
   assert.equal(result.warnings.some((item) => item.field === "品牌风险"), false);
 });
 
@@ -286,6 +293,7 @@ test("validator keeps brand risk text for explicit Adobe brand keywords", () => 
 
   assert.match(result.values["建议"], /品牌|商标/);
   assert.match(result.values["判断依据"], /品牌|商标/);
+  assert.equal(result.values["评级"], "B");
   assert.equal(result.warnings.some((item) => item.field === "品牌风险"), false);
 });
 
@@ -379,7 +387,7 @@ test("validator adds brand risk for newly covered brand calculator keywords", ()
   }
 });
 
-test("validator preserves brand risk for perchance brand keywords", () => {
+test("validator excludes heavy brand keywords after risk downgrade", () => {
   const result = validateKeyword(
     "perchance ai story generator",
     continuedOutput({
@@ -391,7 +399,9 @@ test("validator preserves brand risk for perchance brand keywords", () => {
     })
   );
 
-  assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|Perchance/i);
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+  assert.match(result.values["判断依据"], /品牌|版权|重难度|降级排除/);
   assert.equal(result.warnings.some((item) => item.reason.includes("非品牌关键词误含")), false);
 });
 
@@ -476,13 +486,47 @@ test("validator treats cd calculator as certificate of deposit", () => {
   assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /Certificate of Deposit|金融教育|YMYL|免责声明/);
 });
 
-test("validator still excludes investment and tax calculators", () => {
+test("validator fixes light soft exclusion items at C", () => {
   for (const keyword of ["investment calculator", "tax calculator"]) {
     const result = validateKeyword(keyword);
+    assert.equal(result.values["意图"], "工具站");
+    assert.equal(result.values["第一次判断"], "继续");
+    assert.equal(result.values["评级"], "C");
+    assert.equal(result.values["agent状态"], "完成");
+    assert.match(result.values["判断依据"], /固定评级C|法律税务|金融投资/);
+  }
+});
+
+test("validator excludes medium or heavy soft exclusion items", () => {
+  for (const keyword of ["investment calculator", "tax calculator"]) {
+    const result = validateKeyword(keyword, continuedOutput({
+      difficulty: "中：需专业规则和持续校验",
+      rationale: "工具意图明确但存在专业风险",
+      rating: "B"
+    }));
     assert.equal(result.values["意图"], "其他");
     assert.equal(result.values["第一次判断"], "排除");
     assert.equal(result.values["agent状态"], "排除");
+    assert.match(result.values["判断依据"], /排除项|中重难度|降级排除/);
   }
+});
+
+test("validator excludes direct exclusion items", () => {
+  for (const keyword of ["calendar calculator", "drug dosage calculator", "best free video editor", "software engineer salary"]) {
+    const result = validateKeyword(keyword);
+    assert.equal(result.values["意图"], "其他", keyword);
+    assert.equal(result.values["第一次判断"], "排除", keyword);
+    assert.equal(result.values["agent状态"], "排除", keyword);
+  }
+});
+
+test("validator excludes soft exclusion items with brand or copyright risk", () => {
+  const result = validateKeyword("adobe tax calculator");
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+  assert.match(result.values["判断依据"], /品牌|版权|降级排除/);
 });
 
 test("validator downgrades AI, video, map, and UPC opportunities", () => {
@@ -535,30 +579,31 @@ test("validator recomputes third judgement when monetization is not allowed", ()
 
   assert.equal(result.values["变现渠道"], "轻saas");
   assert.equal(result.values["第三次判断"], "不推荐");
-  assert.equal(result.values["评级"], "B");
+  assert.equal(result.values["评级"], "A");
   assert.ok(result.warnings.some((item) => item.field === "第三次判断"));
 });
 
-test("validator recomputes rating from second and third judgement", () => {
+test("validator recomputes rating from difficulty and brand copyright risk", () => {
   const cases = [
-    { second: "推荐", third: "推荐", expected: "A" },
-    { second: "不推荐", third: "不推荐", expected: "C" },
-    { second: "推荐", third: "不推荐", expected: "B" }
+    { keyword: "random word generator", difficulty: "轻：Workers可做", recommendation: "做免费轻工具页承接流量", rationale: "需求明确且实现轻量", expected: "A" },
+    { keyword: "custom template calculator", difficulty: "中：需少量模板数据", recommendation: "做工具页验证数据", rationale: "需数据来源验证", expected: "B" },
+    { keyword: "complex api generator", difficulty: "重：依赖复杂API和队列", recommendation: "先验证重能力", rationale: "实现复杂且成本较高", expected: "C" },
+    { keyword: "canva qr code generator", difficulty: "轻：Workers可做", recommendation: "做免费轻工具页并提示品牌风险", rationale: "关键词含Canva品牌信号", expected: "B" }
   ];
 
   for (const item of cases) {
     const result = validateLLMOutput(
-      { rowNumber: 40 },
+      { rowNumber: 40, keyword: item.keyword },
       {
         rowNumber: 40,
         intent: "工具站",
         firstJudgement: "继续",
-        difficulty: "轻：Workers可做",
-        secondJudgement: item.second,
+        difficulty: item.difficulty,
+        secondJudgement: "推荐",
         monetization: "广告",
-        thirdJudgement: item.third,
-        recommendation: "做免费轻工具页承接流量",
-        rationale: "需求明确且实现轻量，适合当前客户能力和变现方式",
+        thirdJudgement: "推荐",
+        recommendation: item.recommendation,
+        rationale: item.rationale,
         rating: "A"
       },
       { desiredIntent: "工具站", allowedMonetizationChannels: ["广告"] }

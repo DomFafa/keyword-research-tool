@@ -54,22 +54,26 @@ const BRAND_PATTERNS = [
   /\bcapcut\b/
 ];
 
-const EXCLUSION_PATTERNS = [
+const DIRECT_EXCLUSION_PATTERNS = [
   { type: "成人敏感", pattern: /\b(porn|porno|nsfw|adult|nude|xxx|hentai|erotic|sex)\b/ },
   { type: "赌博博彩", pattern: /\b(casino|slots?|sportsbook|betting|gambling|lottery|poker)\b/ },
   { type: "破解盗版", pattern: /\b(cracks?|cracked|torrent|pirate|mod\s*apk|keygen|activation|bypass|unlocker?)\b/ },
   { type: "医疗高风险", pattern: /\b(dosage|dose|drug|medication|symptom|diagnosis|peptide)\b/ },
-  { type: "法律税务高风险", pattern: /\b(legal|lawyer|lawsuit|tax|irs)\b/ },
-  { type: "金融投资建议", pattern: /\b(stock\s+market|crypto\s+trading|day\s+trading|options?\s+profit|stock|crypto|forex|trading|investment|investing)\b/ },
   { type: "推荐/对比内容意图", pattern: /\b(best|top|review|reviews|recommend(?:ed|ation)?|comparison)\s+(free\s+)?video\s+editors?\b|\bfree\s+video\s+editor\s+apps?\b/ },
-  { type: "实体发电机/商品词", pattern: /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/ }
+  { type: "实体发电机/商品词", pattern: /\b(honda|generac|jackery|portable|solar|powered|power|inverter|whole\s+house|standby|diesel|gas|propane|ozone)\s+generator\b|\bgenerator\s+(for\s+sale|price|parts|manual|oil|battery|repair)\b/ },
+  { type: "招聘/工资/职位", pattern: /\b(jobs?|careers?|salaries|positions?|hiring|recruit(?:ing|ment)?)\b|\bsalary\b(?!\s+paycheck\s+calculator\b)/ }
+];
+
+const SOFT_EXCLUSION_PATTERNS = [
+  { type: "法律税务高风险", pattern: /\b(legal|lawyer|lawsuit|tax|irs)\b/ },
+  { type: "金融投资建议", pattern: /\b(stock\s+market|crypto\s+trading|day\s+trading|options?\s+profit|stock|crypto|forex|trading|investment|investing)\b/ }
 ];
 
 const SIMPLE_AI_REPLACED_PATTERNS = [
   { type: "单位换算", pattern: /\b(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\s+to\s+(cm|centimeter|inches?|inch|kg|kilogram|lbs?|pounds?|mile|km|kilometer|meter|feet|foot|fahrenheit|celsius)\b/ },
   { type: "货币换算", pattern: /\b(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\s+to\s+(usd|eur|gbp|jpy|cny|rmb|cad|aud|hkd)\b|\bcurrency\s+(converter|calculator)\b|\bexchange\s+rate\b/ },
   { type: "简单数学", pattern: /\b(percent|percentage)\b/ },
-  { type: "日期时间", pattern: /\b(days?\s+between|date\s+calculator|time\s+duration|hours?\s+calculator|minutes?\s+calculator)\b/ }
+  { type: "日期时间", pattern: /\b(days?\s+between|date\s+calculator|calendar\s+calculator|time\s+duration|hours?\s+calculator|minutes?\s+calculator)\b/ }
 ];
 
 const LIGHT_PATTERNS = [
@@ -221,7 +225,7 @@ function detectActualIntent(keyword) {
 function classifyIntent(keyword, rule) {
   const text = normalize(keyword);
   const desiredIntent = targetIntent(rule);
-  const excluded = firstMatch(EXCLUSION_PATTERNS, text);
+  const excluded = firstMatch(DIRECT_EXCLUSION_PATTERNS, text);
   if (excluded) {
     return {
       intent: "其他",
@@ -244,6 +248,7 @@ function classifyIntent(keyword, rule) {
     }
   }
 
+  const softExclusion = firstMatch(SOFT_EXCLUSION_PATTERNS, text);
   const actualIntent = detectActualIntent(keyword);
   if (actualIntent.intent === "其他") {
     return {
@@ -270,7 +275,9 @@ function classifyIntent(keyword, rule) {
     firstJudgement: "继续",
     stop: false,
     reason: actualIntent.reason || `匹配${desiredIntent}需求`,
-    actualIntent: actualIntent.intent
+    actualIntent: actualIntent.intent,
+    softExclusion: Boolean(softExclusion),
+    softExclusionReason: softExclusion?.type || ""
   };
 }
 
@@ -379,14 +386,31 @@ function chooseMonetization(keyword, { desiredIntent = "工具站", actualIntent
   };
 }
 
-function rating(secondJudgement, thirdJudgement) {
-  if (secondJudgement === "推荐" && thirdJudgement === "推荐") {
-    return "A";
-  }
-  if (secondJudgement === "不推荐" && thirdJudgement === "不推荐") {
-    return "C";
-  }
+function baseRatingFromDifficulty(difficulty, { softExclusion = false } = {}) {
+  const level = difficulty?.level || "";
+  if (softExclusion) return level === "轻" ? "C" : "排除";
+  if (level === "轻") return "A";
+  if (level === "中") return "B";
+  if (level === "重") return "C";
   return "B";
+}
+
+function containsCopyrightRiskText(text) {
+  return /版权|授权|官方|copyright|license|licensing|official/i.test(String(text || ""));
+}
+
+function downgradeRatingForRisk(currentRating) {
+  if (currentRating === "A") return "B";
+  if (currentRating === "B") return "C";
+  if (currentRating === "C") return "排除";
+  return currentRating;
+}
+
+function rating(difficulty, { brand = false, recommendation = "", rationale = "", monetization = "", softExclusion = false } = {}) {
+  const baseRating = baseRatingFromDifficulty(difficulty, { softExclusion });
+  const riskText = [recommendation, rationale, monetization].join(" ");
+  const hasRisk = brand || /品牌|商标|误导|同名站|截流|brand|trademark/i.test(riskText) || containsCopyrightRiskText(riskText);
+  return hasRisk ? downgradeRatingForRisk(baseRating) : baseRating;
 }
 
 function buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent }) {
@@ -461,6 +485,7 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
   result["建议"] = buildRecommendation({ keyword, difficulty, monetization, brand, financialRisk, healthRisk, actualIntent });
   result["判断依据"] = compactText([
     intentResult.reason,
+    intentResult.softExclusionReason ? `${intentResult.softExclusionReason}，按排除项固定评级C` : "",
     financialRisk.matched ? financialRisk.rationale : "",
     healthRisk.matched ? healthRisk.rationale : "",
     difficulty.reason,
@@ -468,7 +493,41 @@ export function evaluateKeywordAgentRow(keywordRow, rule) {
     channelAllowed ? "" : "不匹配客户变现渠道",
     brand ? "品牌词风险" : ""
   ], 80);
-  result["评级"] = rating(secondJudgement, thirdJudgement);
+  const finalRating = rating(difficulty, {
+    brand,
+    recommendation: result["建议"],
+    rationale: result["判断依据"],
+    monetization: monetization.reason,
+    softExclusion: intentResult.softExclusion
+  });
+  if (finalRating === "排除") {
+    result["意图"] = "其他";
+    result["第一次判断"] = "排除";
+    delete result["难度"];
+    delete result["第二次判断"];
+    delete result["变现渠道"];
+    delete result["第三次判断"];
+    delete result["建议"];
+    delete result["评级"];
+    result["判断依据"] = compactText([
+      intentResult.reason,
+      difficulty.reason,
+      intentResult.softExclusion
+        ? brand
+          ? "排除项中重难度且叠加品牌/版权风险，降级排除"
+          : "排除项为中/重难度，降级排除"
+        : brand
+          ? "品牌/版权风险叠加重难度，降级排除"
+          : "版权风险叠加重难度，降级排除"
+    ], 80);
+    result[AGENT_STATUS_COLUMN] = "排除";
+    return {
+      values: result,
+      stopAfterFirstJudgement: true,
+      summary: result["判断依据"]
+    };
+  }
+  result["评级"] = finalRating;
   result[AGENT_STATUS_COLUMN] = "完成";
 
   return {

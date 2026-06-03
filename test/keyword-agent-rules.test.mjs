@@ -75,7 +75,7 @@ test("keyword agent can recommend B2B showcase monetization when other channel i
   assert.equal(result.values["变现渠道"], "其他");
   assert.equal(result.values["第二次判断"], "推荐");
   assert.equal(result.values["第三次判断"], "推荐");
-  assert.equal(result.values["评级"], "A");
+  assert.equal(result.values["评级"], "B");
 });
 
 test("keyword agent rejects B2B showcase monetization when other channel is not allowed", () => {
@@ -93,21 +93,22 @@ test("keyword agent rejects B2B showcase monetization when other channel is not 
 });
 
 test("keyword agent stops after first judgement for AI-replaced simple utilities", () => {
-  const result = evaluateKeywordAgentRow(row("percentage calculator"), toolRule);
+  for (const keyword of ["percentage calculator", "calendar calculator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
-  assert.equal(result.stopAfterFirstJudgement, true);
-  assert.equal(result.values["意图"], "其他");
-  assert.equal(result.values["第一次判断"], "排除");
-  assert.match(result.values["判断依据"], /可被AI直接满足/);
-  assert.equal(result.values["agent状态"], "排除");
+    assert.equal(result.stopAfterFirstJudgement, true);
+    assert.equal(result.values["意图"], "其他");
+    assert.equal(result.values["第一次判断"], "排除");
+    assert.match(result.values["判断依据"], /可被AI直接满足/);
+    assert.equal(result.values["agent状态"], "排除");
+  }
 });
 
 test("keyword agent excludes adult and high-risk terms", () => {
   assert.equal(evaluateKeywordAgentRow(row("ai porn generator"), toolRule).values["第一次判断"], "排除");
   assert.equal(evaluateKeywordAgentRow(row("casino odds calculator"), toolRule).values["第一次判断"], "排除");
   assert.equal(evaluateKeywordAgentRow(row("peptide calculator"), toolRule).values["第一次判断"], "排除");
-  assert.equal(evaluateKeywordAgentRow(row("tax calculator"), toolRule).values["第一次判断"], "排除");
-  assert.equal(evaluateKeywordAgentRow(row("investment calculator"), toolRule).values["第一次判断"], "排除");
+  assert.equal(evaluateKeywordAgentRow(row("software engineer salary"), toolRule).values["第一次判断"], "排除");
 });
 
 test("keyword agent keeps financial education calculators with risk warnings", () => {
@@ -145,7 +146,7 @@ test("keyword agent keeps health education calculators with risk warnings", () =
   }
 });
 
-test("keyword agent still excludes tax and investment calculators", () => {
+test("keyword agent excludes legal tax and investment terms when difficulty is not light", () => {
   const tax = evaluateKeywordAgentRow(row("tax calculator"), toolRule);
   assert.equal(tax.values["意图"], "其他");
   assert.equal(tax.values["第一次判断"], "排除");
@@ -154,11 +155,20 @@ test("keyword agent still excludes tax and investment calculators", () => {
 
   const crypto = evaluateKeywordAgentRow(row("crypto calculator"), toolRule);
   assert.equal(crypto.values["第一次判断"], "排除");
-  assert.match(crypto.values["判断依据"], /金融投资|高风险|投资建议/);
+  assert.match(crypto.values["判断依据"], /金融投资|排除项/);
 
   const investment = evaluateKeywordAgentRow(row("investment calculator"), toolRule);
   assert.equal(investment.values["第一次判断"], "排除");
-  assert.match(investment.values["判断依据"], /金融投资|高风险|投资建议/);
+  assert.match(investment.values["判断依据"], /金融投资|排除项/);
+});
+
+test("keyword agent excludes soft exclusion terms when brand or copyright risk is present", () => {
+  const result = evaluateKeywordAgentRow(row("adobe tax calculator"), toolRule);
+
+  assert.equal(result.values["意图"], "其他");
+  assert.equal(result.values["第一次判断"], "排除");
+  assert.equal(result.values["agent状态"], "排除");
+  assert.match(result.values["判断依据"], /品牌\/版权风险|降级排除/);
 });
 
 test("keyword agent rejects physical generator product keywords", () => {
@@ -171,24 +181,35 @@ test("keyword agent rejects physical generator product keywords", () => {
   }
 });
 
-test("keyword agent does not reject brand terms but warns in recommendation", () => {
+test("keyword agent downgrades brand terms without rejecting light and medium opportunities", () => {
   for (const keyword of [
     "canva qr code generator",
     "starbucks calorie calculator",
     "smartasset paycheck calculator",
-    "dave ramsey mortgage calculator",
-    "perchance ai story generator"
+    "dave ramsey mortgage calculator"
   ]) {
     const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
     assert.equal(result.values["第一次判断"], "继续");
     assert.match(`${result.values["建议"]} ${result.values["判断依据"]}`, /品牌|商标|风险/);
     assert.equal(result.values["agent状态"], "完成");
+    assert.notEqual(result.values["评级"], "A");
   }
 });
 
-test("keyword agent marks heavy AI tools as not matching light edge capability", () => {
-  for (const keyword of ["runway ai video generator", "suno ai music generator", "upc generator", "map calculator", "online video editor"]) {
+test("keyword agent excludes heavy brand opportunities after risk downgrade", () => {
+  for (const keyword of ["perchance ai story generator", "suno ai music generator"]) {
+    const result = evaluateKeywordAgentRow(row(keyword), toolRule);
+
+    assert.equal(result.values["意图"], "其他");
+    assert.equal(result.values["第一次判断"], "排除");
+    assert.match(result.values["判断依据"], /品牌\/版权风险|降级排除/);
+    assert.equal(result.values["agent状态"], "排除");
+  }
+});
+
+test("keyword agent marks heavy tools as not matching light edge capability", () => {
+  for (const keyword of ["upc generator", "map calculator", "online video editor"]) {
     const result = evaluateKeywordAgentRow(row(keyword), toolRule);
 
     assert.equal(result.values["评级"] === "A", false);
@@ -214,5 +235,5 @@ test("keyword agent rejects monetization mismatch", () => {
 
   assert.equal(result.values["变现渠道"], "广告");
   assert.equal(result.values["第三次判断"], "不推荐");
-  assert.equal(result.values["评级"], "B");
+  assert.equal(result.values["评级"], "A");
 });
