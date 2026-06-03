@@ -191,6 +191,10 @@ function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, 
   const bingSecondJudgementIndex = optionalHeaderIndex(keywordTable.headers, "bing二次判断");
   const top5Index = optionalHeaderIndex(keywordTable.headers, "top5根域名数量");
   const top1CountryIndex = optionalHeaderIndex(keywordTable.headers, "top 1国家");
+  const ratingIndex = optionalHeaderIndex(keywordTable.headers, "评级");
+  if (countryOnly && ratingIndex === -1) {
+    throw new Error(`${KEYWORD_TOTAL_SHEET} 缺少表头: 评级`);
+  }
   const selected = [];
   for (const row of keywordTable.rows) {
     if (fromRow && row.rowNumber < fromRow) {
@@ -203,22 +207,22 @@ function selectKeywordRows(keywordTable, { fromRow, toRow, force, onlyTop5Zero, 
     if (!judgement && !toRow) {
       break;
     }
-    if (judgement !== "继续") {
-      continue;
-    }
     if (onlyTop5Zero && String(row.values[top5Index] || "").trim() !== "0") {
       continue;
     }
     const bingJudgement = bingJudgementIndex === -1 ? "" : String(row.values[bingJudgementIndex] || "").trim();
     if (countryOnly) {
-      const bingSecondJudgement = bingSecondJudgementIndex === -1 ? "" : String(row.values[bingSecondJudgementIndex] || "").trim();
-      if (bingSecondJudgement !== "继续") {
+      const rating = ratingIndex === -1 ? "" : String(row.values[ratingIndex] || "").trim();
+      if (rating !== "A") {
         continue;
       }
-      if (onlyMissingCountry && String(row.values[top1CountryIndex] || "").trim()) {
+      if (onlyMissingCountry && top1CountryIndex !== -1 && String(row.values[top1CountryIndex] || "").trim()) {
         continue;
       }
       selected.push(row);
+      continue;
+    }
+    if (judgement !== "继续") {
       continue;
     }
     if (onlyMissingCountry) {
@@ -406,7 +410,7 @@ async function readRequiredSheet(sheetUrl, range) {
   return valuesToTable(result.values || []);
 }
 
-function buildKeywordTotalUpdates(keywordHeaders, keywordRow, precheck, countryTopRows, competition) {
+function buildKeywordTotalUpdates(keywordHeaders, keywordRow, precheck, competition) {
   const updates = new Map();
   const set = (header, value) => {
     const index = headerIndex(keywordHeaders, header);
@@ -417,11 +421,7 @@ function buildKeywordTotalUpdates(keywordHeaders, keywordRow, precheck, countryT
   set("top5根域名数量", String(competition.count));
   set("bing初步判断", precheck.judgement);
 
-  const clearDetailFields = () => {
-    for (let index = 0; index < 3; index += 1) {
-      set(`top ${index + 1}国家`, "");
-      set(`top ${index + 1}展示量`, "");
-    }
+  const clearDomainFields = () => {
     set("根域名1", "");
     set("根域名1排名", "");
     set("根域名2", "");
@@ -429,19 +429,13 @@ function buildKeywordTotalUpdates(keywordHeaders, keywordRow, precheck, countryT
   };
 
   if (precheck.judgement !== "拒绝") {
-    const topCountries = countryTopRows.slice(0, 3);
-    for (let index = 0; index < 3; index += 1) {
-      set(`top ${index + 1}国家`, topCountries[index]?.country || "");
-      set(`top ${index + 1}展示量`, formatInteger(topCountries[index]?.impressionsNumber ?? ""));
-    }
-
     const topDomains = competition.domains.slice(0, 2);
     set("根域名1", topDomains[0]?.domain || "");
     set("根域名1排名", topDomains[0]?.rank ? String(topDomains[0].rank) : "");
     set("根域名2", topDomains[1]?.domain || "");
     set("根域名2排名", topDomains[1]?.rank ? String(topDomains[1].rank) : "");
   } else {
-    clearDetailFields();
+    clearDomainFields();
   }
 
   const existing = [...keywordRow.values];
@@ -471,7 +465,7 @@ function findTopCountrySlots(keywordHeaders) {
     .sort((a, b) => a.slot - b.slot);
 }
 
-function buildKeywordTotalApiUpdates(keywordHeaders, keywordRow, apiPrecheck, countryTopRows, { includeCountryBreakdown = true } = {}) {
+function buildKeywordTotalApiUpdates(keywordHeaders, keywordRow, apiPrecheck) {
   const updates = new Map();
   const set = (header, value) => {
     const index = headerIndex(keywordHeaders, header);
@@ -480,16 +474,6 @@ function buildKeywordTotalApiUpdates(keywordHeaders, keywordRow, apiPrecheck, co
 
   set("3M展示", formatInteger(apiPrecheck.impressionsNumber));
   set("bing初步判断", apiPrecheck.judgement);
-
-  if (includeCountryBreakdown) {
-    const slots = findTopCountrySlots(keywordHeaders);
-    const topCountries = countryTopRows.slice(0, slots.length);
-    for (const slot of slots) {
-      const row = topCountries[slot.slot - 1];
-      set(slot.countryHeader, row?.country || "");
-      set(slot.impressionHeader, formatInteger(row?.impressionsNumber ?? ""));
-    }
-  }
 
   for (const header of [
     "top5根域名数量",
@@ -583,7 +567,6 @@ async function processKeywordRow({
   rule,
   bingApiKey,
   useBingApiMetrics,
-  bingApiCountryCodes,
   bingApiCountryConcurrency,
   bingApiCountryRequestDelayMs
 }) {
@@ -596,7 +579,7 @@ async function processKeywordRow({
     const metrics = await getKeywordResearchMetrics({
       apiKey: bingApiKey,
       keyword,
-      countryCodes: bingApiCountryCodes,
+      countryCodes: [],
       countryConcurrency: bingApiCountryConcurrency,
       countryRequestDelayMs: bingApiCountryRequestDelayMs
     });
@@ -618,12 +601,12 @@ async function processKeywordRow({
     maxTop5Domains
   });
 
-  let countryTopRows = [];
-  if (precheck.judgement !== "拒绝") {
-    countryTopRows = sortCountryBreakdown(extracted.countryRows || []);
-  }
-
-  const values = buildKeywordTotalUpdates(keywordTable.headers, keywordRow, precheck, countryTopRows, competition);
+  const values = buildKeywordTotalUpdates(
+    keywordTable.headers,
+    keywordRow,
+    precheck,
+    competition
+  );
   const writeResult = await writeKeywordTotalRow({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
@@ -668,7 +651,7 @@ async function processKeywordRow({
     impressions: formatInteger(precheck.impressionsNumber),
     top5DomainCount: competition.count,
     domains: competition.domains.slice(0, 2),
-    topCountries: countryTopRows.slice(0, 3),
+    topCountries: [],
     writeResult,
     formatResult,
     pendingFormatResult
@@ -682,17 +665,15 @@ async function processKeywordRowApiOnly({
   keywordRow,
   rule,
   bingApiKey,
-  bingApiCountryCodes,
   bingApiCountryConcurrency,
-  bingApiCountryRequestDelayMs,
-  includeCountryBreakdown
+  bingApiCountryRequestDelayMs
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const minImpressions = rule.record["bing最低展示量"] || "";
   const metrics = await getKeywordResearchMetrics({
     apiKey: bingApiKey,
     keyword,
-    countryCodes: includeCountryBreakdown ? bingApiCountryCodes : [],
+    countryCodes: [],
     countryConcurrency: bingApiCountryConcurrency,
     countryRequestDelayMs: bingApiCountryRequestDelayMs
   });
@@ -700,16 +681,7 @@ async function processKeywordRowApiOnly({
     impressions: metrics.impressions,
     minImpressions
   });
-  const countryTopRows = includeCountryBreakdown
-    ? sortCountryBreakdown(metrics.countryRows || []).slice(0, 5)
-    : [];
-  const values = buildKeywordTotalApiUpdates(
-    keywordTable.headers,
-    keywordRow,
-    apiPrecheck,
-    countryTopRows,
-    { includeCountryBreakdown }
-  );
+  const values = buildKeywordTotalApiUpdates(keywordTable.headers, keywordRow, apiPrecheck);
   const writeResult = await writeKeywordTotalRow({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
@@ -736,7 +708,7 @@ async function processKeywordRowApiOnly({
     keyword,
     judgement: apiPrecheck.judgement,
     impressions: formatInteger(apiPrecheck.impressionsNumber),
-    topCountries: countryTopRows,
+    topCountries: [],
     writeResult,
     formatResult
   };
@@ -771,7 +743,7 @@ async function processKeywordRowCountryOnly({
     keyword,
     judgement: keywordRow.record["bing初步判断"] || "",
     impressions: keywordRow.record["3M展示"] || "",
-    topCountries: countryTopRows.slice(0, 3),
+    topCountries: countryTopRows.slice(0, 10),
     writeResult
   };
 }
@@ -936,10 +908,12 @@ async function main() {
   const maxDelayMs = Number(readArg("max-delay-ms", "7500")) || 7500;
   const rowRetries = Number(readArg("row-retries", "3")) || 3;
   const cleanBingTabs = readFlag("clean-bing-tabs");
-  const apiOnly = readFlag("api-only");
+  const apiOnlyRequested = readFlag("api-only");
   const chromeOnly = readFlag("chrome-only");
-  const countryOnly = readFlag("country-only");
-  const includeCountryBreakdown = !readFlag("skip-country-breakdown");
+  const legacyCountryOnly = readFlag("country-only");
+  const agentACountryOnly = readFlag("agent-a-country-only");
+  const countryOnly = agentACountryOnly;
+  const apiOnly = apiOnlyRequested || countryOnly;
   const useBingApiMetrics = shouldUseBingApiMetrics(readArg("bing-api-metrics", "1"));
   const bingApiSource = readArg("bing-api-source", "auto");
   const bingApiStartFingerprint = readArg("bing-api-start-fingerprint", "25");
@@ -951,8 +925,17 @@ async function main() {
   const fromRow = Number(rowArg || fromRowArg || "0") || 0;
   const toRow = Number(rowArg || toRowArg || "0") || 0;
 
+  if (countryOnly && chromeOnly) {
+    throw new Error("--agent-a-country-only/--country-only 不能和 --chrome-only 同时使用");
+  }
   if (apiOnly && chromeOnly) {
     throw new Error("--api-only 和 --chrome-only 不能同时使用");
+  }
+  if (legacyCountryOnly) {
+    throw new Error("--country-only 已删除。国家流量只允许使用 --agent-a-country-only，并且只处理 评级=A 的行。");
+  }
+  if (readFlag("include-country-breakdown") || readFlag("skip-country-breakdown")) {
+    throw new Error("--include-country-breakdown/--skip-country-breakdown 已删除。国家流量只允许在 --agent-a-country-only 模式抓取。");
   }
 
   let cdp = apiOnly ? null : await connectChromeCdpWithRecovery();
@@ -997,7 +980,8 @@ async function main() {
 
     console.log(`Selected ${keywordRows.length} keyword row(s).`);
     console.log(`Bing metric source: ${bingApiKeys.length ? `official API (${bingApiSource}, ${bingApiKeys.length} key(s))` : "browser page"}`);
-    console.log(`Mode: ${chromeOnly ? "chrome-only" : apiOnly ? "api-only" : "api+chrome"}`);
+    console.log(`Mode: ${countryOnly ? "agent-a-country-only" : chromeOnly ? "chrome-only" : apiOnly ? "api-only" : "api+chrome"}`);
+    console.log(`Country breakdown: ${countryOnly ? "agent A only" : "disabled"}`);
 
     if (apiOnly && bingApiKeys.length === 0) {
       throw new Error("api-only 模式需要飞书 api 注册中的 bing webmaster api、secrets/bing-webmaster-api-key.txt 或 BING_WEBMASTER_API_KEY");
@@ -1136,10 +1120,8 @@ async function main() {
                 keywordRow,
                 rule,
                 bingApiKey: currentBingApiKey(),
-                bingApiCountryCodes,
                 bingApiCountryConcurrency,
-                bingApiCountryRequestDelayMs,
-                includeCountryBreakdown
+                bingApiCountryRequestDelayMs
               });
               break;
             } catch (error) {
@@ -1179,10 +1161,9 @@ async function main() {
                     rule,
                     bingApiKey: currentBingApiKey(),
                     useBingApiMetrics,
-                    bingApiCountryCodes,
                     bingApiCountryConcurrency,
-                  bingApiCountryRequestDelayMs
-                });
+                    bingApiCountryRequestDelayMs
+                  });
                   break;
                 } catch (error) {
                   if (!isTransientBingAutomationError(error) || rowTry >= rowRetries) {
@@ -1232,7 +1213,8 @@ async function main() {
     await writeJson(`${outDir}/last-run-summary.json`, {
       sheetUrl,
       siteUrl,
-      mode: chromeOnly ? "chrome-only" : apiOnly ? "api-only" : "api+chrome",
+      mode: countryOnly ? "agent-a-country-only" : chromeOnly ? "chrome-only" : apiOnly ? "api-only" : "api+chrome",
+      countryBreakdown: countryOnly ? "agent-a-only" : "disabled",
       accounts,
       lastAccount: accounts[accountIndex],
       rows: keywordRows.map((row) => row.rowNumber),
