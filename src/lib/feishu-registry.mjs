@@ -79,7 +79,7 @@ export async function readFeishuBingRegistry({
 } = {}) {
   const result = await getFeishuSheetValues({
     config,
-    range: `${API_REGISTER_SHEET_ID}!A1:J1000`
+    range: `${API_REGISTER_SHEET_ID}!A1:Z1000`
   });
   const totalResult = await getFeishuSheetValues({
     config,
@@ -91,6 +91,10 @@ export async function readFeishuBingRegistry({
   const fingerprintIndex = headerIndex(table.headers, "指纹的名称", "飞书 api 注册");
   const bingApiIndex = headerIndex(table.headers, "bing webmaster api", "飞书 api 注册");
   const regionIndex = optionalHeader(table.headers, ["地区", "地址", "区域", "region"]);
+  const emailIndex = optionalHeader(table.headers, ["邮箱账号", "邮箱", "email", "account"]);
+  const passwordIndex = optionalHeader(table.headers, ["邮箱密码", "密码", "password"]);
+  const recoverEmailIndex = optionalHeader(table.headers, ["安全邮箱", "恢复邮箱", "recover email", "recovery email"]);
+  const fallbackPasswordIndex = optionalHeader(table.headers, ["默认返利网密码", "返利网密码", "fanli password"]);
   const rows = [];
   for (const row of table.rows) {
     const fingerprintName = resolveReferenceCellFromCache({
@@ -112,7 +116,11 @@ export async function readFeishuBingRegistry({
       fingerprintName,
       serialNumber: Number(fingerprintName) || null,
       bingWebmasterApi,
-      region: regionIndex >= 0 ? cellText(row.values[regionIndex]) : ""
+      region: regionIndex >= 0 ? resolveReferenceCellFromCache({ totalValues, value: row.values[regionIndex] }) : "",
+      email: emailIndex >= 0 ? resolveReferenceCellFromCache({ totalValues, value: row.values[emailIndex] }) : "",
+      password: passwordIndex >= 0 ? resolveReferenceCellFromCache({ totalValues, value: row.values[passwordIndex] }) : "",
+      recoverEmail: recoverEmailIndex >= 0 ? resolveReferenceCellFromCache({ totalValues, value: row.values[recoverEmailIndex] }) : "",
+      fallbackPassword: fallbackPasswordIndex >= 0 ? resolveReferenceCellFromCache({ totalValues, value: row.values[fallbackPasswordIndex] }) : ""
     });
   }
 

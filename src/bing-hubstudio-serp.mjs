@@ -10,6 +10,7 @@ import {
   readDebuggerEndpointFromPort
 } from "./lib/cdp.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
+import { runBingWebmasterAuthFlow } from "./lib/bing-webmaster-auth.mjs";
 import { searchBingKeyword, waitForBingKeywordResearchReady } from "./lib/bing-page.mjs";
 import { evaluateBingPrecheck, formatInteger, summarizeTopUrlCompetition } from "./lib/bing-precheck.mjs";
 import { readArg, readFlag } from "./lib/args.mjs";
@@ -400,6 +401,7 @@ async function openBingKeywordResearchFromHome(cdp, sessionId, { maxChromeErrors
 async function startFingerprintSession({
   hubConfig,
   fingerprint,
+  bingAuthMode = "auto",
   proxyUpdateMode = "off",
   proxyRegion = "",
   hostPublicIp = ""
@@ -446,7 +448,31 @@ async function startFingerprintSession({
     if (guard.ok) {
       console.log(`  ${guard.message}`);
       console.log("  open Bing Webmaster Keyword Research");
-      const activeSiteUrl = await openBingKeywordResearchFromHome(cdp, page.sessionId);
+      let activeSiteUrl = "";
+      try {
+        activeSiteUrl = await openBingKeywordResearchFromHome(cdp, page.sessionId);
+      } catch (error) {
+        const originalMessage = error.message || String(error);
+        const shouldTryAuth = String(bingAuthMode || "auto").toLowerCase() !== "off" &&
+          String(bingAuthMode || "auto").toLowerCase() !== "false" &&
+          fingerprint.email &&
+          fingerprint.password;
+        if (!shouldTryAuth) {
+          throw error;
+        }
+        console.warn(`  Keyword Research unavailable; try Bing Webmaster auth fallback: ${originalMessage}`);
+        const authResult = await runBingWebmasterAuthFlow(cdp, page.sessionId, {
+          email: fingerprint.email,
+          password: fingerprint.password,
+          recoverEmail: fingerprint.recoverEmail,
+          fallbackPassword: fingerprint.fallbackPassword
+        });
+        if (!authResult.ok) {
+          throw new Error(`${originalMessage}; Bing auth fallback failed: ${authResult.reason}`);
+        }
+        console.log("  Bing Webmaster auth fallback succeeded; reopen Keyword Research");
+        activeSiteUrl = await openBingKeywordResearchFromHome(cdp, page.sessionId);
+      }
       console.log(`  active siteUrl: ${activeSiteUrl}`);
       return { ...session, activeSiteUrl };
     }
@@ -616,6 +642,7 @@ async function startFingerprintSessionWithRetry({
   hubConfig,
   fingerprint,
   attempts = 3,
+  bingAuthMode = "auto",
   proxyUpdateMode = "off",
   proxyRegion = "",
   hostPublicIp = ""
@@ -626,6 +653,7 @@ async function startFingerprintSessionWithRetry({
       return await startFingerprintSession({
         hubConfig,
         fingerprint,
+        bingAuthMode,
         proxyUpdateMode,
         proxyRegion,
         hostPublicIp
@@ -678,6 +706,7 @@ async function main() {
   const maxRowsPerFingerprint = Number(readArg("max-rows-per-fingerprint", "90")) || 90;
   const rowRetries = Number(readArg("row-retries", "2")) || 2;
   const topUrlEmptySwitchAttempts = Number(readArg("top-url-empty-switch-attempts", "3")) || 3;
+  const bingAuthMode = readArg("bing-auth", "auto");
   const proxyUpdateMode = readArg("proxy-update", "auto");
   const force = readFlag("force");
   const outDir = readArg("out-dir", "output/bing-hubstudio-serp");
@@ -733,6 +762,7 @@ async function main() {
           hubConfig,
           fingerprint,
           attempts: rowRetries,
+          bingAuthMode,
           proxyUpdateMode,
           proxyRegion,
           hostPublicIp
@@ -761,6 +791,7 @@ async function main() {
       hubConfig,
       fingerprint: activeFingerprint,
       attempts: rowRetries,
+      bingAuthMode,
       proxyUpdateMode: "off",
       hostPublicIp
     });
