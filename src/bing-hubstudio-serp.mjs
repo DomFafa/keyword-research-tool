@@ -673,9 +673,9 @@ async function main() {
   const fromRow = Number(readArg("from-row", readArg("row", "11"))) || 11;
   const toRow = Number(readArg("to-row", readArg("row", "100"))) || 100;
   const keywordTotalGid = readArg("keyword-total-gid", "999267438");
-  const startFingerprintName = readArg("start-fingerprint", "25");
+  const startFingerprintName = readArg("start-fingerprint", "1");
   const fingerprintLimit = Number(readArg("fingerprint-limit", "0")) || 0;
-  const maxRowsPerFingerprint = Number(readArg("max-rows-per-fingerprint", "80")) || 80;
+  const maxRowsPerFingerprint = Number(readArg("max-rows-per-fingerprint", "90")) || 90;
   const rowRetries = Number(readArg("row-retries", "2")) || 2;
   const topUrlEmptySwitchAttempts = Number(readArg("top-url-empty-switch-attempts", "3")) || 3;
   const proxyUpdateMode = readArg("proxy-update", "auto");
@@ -714,6 +714,7 @@ async function main() {
   let proxyRegionIndex = 0;
   let session = null;
   let usedRowsOnFingerprint = 0;
+  let topUrlEmptyAttemptsOnFingerprint = 0;
 
   const switchFingerprint = async () => {
     await closeAndStopFingerprintSession(session, hubConfig);
@@ -737,6 +738,7 @@ async function main() {
           hostPublicIp
         });
         usedRowsOnFingerprint = 0;
+        topUrlEmptyAttemptsOnFingerprint = 0;
         return fingerprint;
       } catch (error) {
         console.warn(
@@ -771,7 +773,6 @@ async function main() {
       const keyword = String(keywordRow.record["关键词"] || "").trim();
       const rule = findRuleForKeywordRow(keywordRow, ruleIndex);
       let handled = false;
-      let topUrlEmptyAttemptsOnFingerprint = 0;
       for (let attempt = 1; attempt <= rowRetries && !handled; attempt += 1) {
         try {
           if (maxRowsPerFingerprint > 0 && usedRowsOnFingerprint >= maxRowsPerFingerprint) {
@@ -849,8 +850,11 @@ async function main() {
                 `Row ${keywordRow.rowNumber}: top URLs empty ${topUrlEmptyAttemptsOnFingerprint} time(s); switch fingerprint from ${activeFingerprint?.fingerprintName}`
               );
               activeFingerprint = await switchFingerprint();
-              topUrlEmptyAttemptsOnFingerprint = 0;
               continue;
+            }
+            if (attempt >= rowRetries) {
+              summaries.push({ row: keywordRow.rowNumber, keyword, failed: true, error: message });
+              break;
             }
             await sleep(2500);
             continue;
