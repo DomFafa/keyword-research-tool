@@ -947,7 +947,9 @@ async function main() {
       readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`)
     ]);
     console.log(`Keyword total headers: ${keywordTable.headers.join(" | ")}`);
-    const accounts = filterBingAccounts(readBingAccounts(accountTable), requestedBingAccount);
+    const accounts = apiOnly
+      ? []
+      : filterBingAccounts(readBingAccounts(accountTable), requestedBingAccount);
     const ruleIndex = buildRuleIndex(taskTable);
     const keywordRows = selectKeywordRows(keywordTable, {
       fromRow,
