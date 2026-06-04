@@ -188,6 +188,31 @@ async function clickByLabels(cdp, sessionId, labels, {
   return result;
 }
 
+async function clickPoint(cdp, sessionId, point) {
+  await cdp.send("Page.bringToFront", {}, sessionId).catch(() => {});
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x,
+    y: point.y
+  }, sessionId);
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1
+  }, sessionId);
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x,
+    y: point.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1
+  }, sessionId);
+}
+
 async function selectNewDomainMethod(cdp, sessionId) {
   const selected = await evaluate(cdp, sessionId, pageActionExpression(`
     const option = [...document.querySelectorAll("[role='option']")].find((el) => {
@@ -258,6 +283,7 @@ async function ensureWelcomeFields(cdp, sessionId, {
     result = await evaluate(cdp, sessionId, pageActionExpression(`
       const desiredName = ${json(businessName)};
       const desiredRegion = ${json(region)};
+      const regionAliases = [desiredRegion, "Turkey", "Türkiye", "土耳其"].map((value) => clean(value).toLowerCase());
       const setValue = (el, value) => {
         el.focus();
         const setter = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value")?.set;
@@ -281,13 +307,16 @@ async function ensureWelcomeFields(cdp, sessionId, {
         employee.dispatchEvent(new Event("change", { bubbles: true }));
       }
 
-      const bodyText = clean(document.body?.innerText);
-      const regionAlreadySet = bodyText.includes(desiredRegion) || bodyText.includes("Turkey") || bodyText.includes("Türkiye");
+      const regionCombobox = document.querySelector("[role='combobox'][aria-haspopup='listbox'], [role='combobox'], .rHGeGc-aPP78e");
+      const regionText = clean(regionCombobox?.innerText || regionCombobox?.textContent || regionCombobox?.getAttribute("aria-label"));
+      const normalizedRegionText = regionText.toLowerCase();
+      const regionAlreadySet = regionAliases.some((alias) => normalizedRegionText.includes(alias));
       return {
         ok: true,
         businessName: clean(businessInput.value),
         employeeJustYou: Boolean(employee.checked),
-        regionAlreadySet
+        regionAlreadySet,
+        regionText
       };
     `), 15000);
     if (result?.ok || result?.reason !== "business input not found") {
@@ -306,31 +335,72 @@ async function ensureWelcomeFields(cdp, sessionId, {
 }
 
 async function chooseRegion(cdp, sessionId, region) {
-  const opened = await evaluate(cdp, sessionId, pageActionExpression(`
-    const candidates = [...document.querySelectorAll("[role='combobox'], [aria-haspopup='listbox'], .rHGeGc-aPP78e")];
+  const control = await evaluate(cdp, sessionId, pageActionExpression(`
+    const candidates = [...document.querySelectorAll("[role='combobox'][aria-haspopup='listbox'], [role='combobox'], .rHGeGc-aPP78e")];
     const match = candidates.find((el) => visible(el) && /region|country|ülke|bölge|国家|地區/i.test(clean(el.innerText || el.textContent || el.getAttribute("aria-label"))))
+      || candidates.find((el) => visible(el) && lower(el.innerText || el.textContent).includes("united state"))
       || candidates.find((el) => visible(el));
     if (!match) return { ok: false, reason: "region selector not found" };
-    clickElement(match);
-    return { ok: true, text: clean(match.innerText || match.textContent || match.getAttribute("aria-label")) };
+    match.focus();
+    const rect = match.getBoundingClientRect();
+    return {
+      ok: true,
+      text: clean(match.innerText || match.textContent || match.getAttribute("aria-label")),
+      expanded: match.getAttribute("aria-expanded"),
+      point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    };
   `), 10000);
-  if (!opened?.ok) {
-    throw new Error(opened?.reason || "Unable to open region selector");
+  if (!control?.ok) {
+    throw new Error(control?.reason || "Unable to locate region selector");
   }
-  await sleep(800);
+  if (control.expanded !== "true") {
+    await clickPoint(cdp, sessionId, control.point);
+    await sleep(1000);
+  }
   const selected = await evaluate(cdp, sessionId, pageActionExpression(`
     const wanted = ${json(region.toLowerCase())};
     const aliases = [wanted, "turkey", "türkiye", "土耳其"];
-    const candidates = [...document.querySelectorAll("[role='option'], [role='menuitem'], li, div")];
-    const match = candidates.find((el) => visible(el) && aliases.some((alias) => lower(el.innerText || el.textContent).includes(alias)));
+    const dispatchSelect = (el) => {
+      el.scrollIntoView({ block: "center", inline: "center" });
+      el.focus();
+      for (const event of [
+        new PointerEvent("pointerdown", { bubbles: true, cancelable: true, composed: true, pointerType: "mouse", button: 0, buttons: 1 }),
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 }),
+        new MouseEvent("mouseup", { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 0 }),
+        new PointerEvent("pointerup", { bubbles: true, cancelable: true, composed: true, pointerType: "mouse", button: 0, buttons: 0 }),
+        new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, button: 0 })
+      ]) {
+        el.dispatchEvent(event);
+      }
+    };
+    const candidates = [
+      ...document.querySelectorAll("[role='option'][data-value='TR'], li[data-value='TR'][role='option']"),
+      ...document.querySelectorAll("[role='option'], li[role='option']")
+    ];
+    const match = candidates.find((el) => {
+      if (!visible(el)) return false;
+      const text = lower([el.innerText, el.textContent, el.getAttribute("aria-label")].filter(Boolean).join(" "));
+      return el.getAttribute("data-value") === "TR" || aliases.some((alias) => text.includes(alias));
+    });
     if (!match) return { ok: false, reason: "region option not found" };
-    clickElement(match);
-    return { ok: true, text: clean(match.innerText || match.textContent) };
+    dispatchSelect(match);
+    return { ok: true, text: clean(match.innerText || match.textContent || match.getAttribute("aria-label")), selected: match.getAttribute("aria-selected") };
   `), 10000);
   if (!selected?.ok) {
     throw new Error(selected?.reason || "Unable to select region");
   }
-  await sleep(500);
+  await sleep(800);
+  const verified = await evaluate(cdp, sessionId, pageActionExpression(`
+    const aliases = [${json(region)}, "Turkey", "Türkiye", "土耳其"].map((value) => clean(value).toLowerCase());
+    const regionCombobox = document.querySelector("[role='combobox'][aria-haspopup='listbox'], [role='combobox'], .rHGeGc-aPP78e");
+    const regionText = clean(regionCombobox?.innerText || regionCombobox?.textContent || regionCombobox?.getAttribute("aria-label"));
+    const ok = aliases.some((alias) => regionText.toLowerCase().includes(alias));
+    return { ok, regionText };
+  `), 10000);
+  if (!verified?.ok) {
+    throw new Error(`Region selection did not stick: ${verified?.regionText || ""}`);
+  }
+  return { control, selected, verified };
 }
 
 async function waitForStateChange(cdp, sessionId, previousState) {
