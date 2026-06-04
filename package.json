@@ -13,6 +13,7 @@
     "task:status": "node src/task-status-sync.mjs",
     "workspace:domain-page": "node src/workspace-domain-page.mjs",
     "workspace:domain-research": "node src/workspace-domain-page.mjs --research-domains",
+    "domain:info-fill": "node src/domain-info-fill.mjs",
     "feishu:test": "node src/feishu-test-connection.mjs",
     "hubstudio:test": "node src/hubstudio-test-connection.mjs",
     "hubstudio:open": "node src/hubstudio-open-browser.mjs",
