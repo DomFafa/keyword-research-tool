@@ -11,6 +11,7 @@
     "bing:download-related": "node src/bing-download-related.mjs",
     "bing:hubstudio-serp": "node src/bing-hubstudio-serp.mjs",
     "task:status": "node src/task-status-sync.mjs",
+    "workspace:domain-page": "node src/workspace-domain-page.mjs",
     "feishu:test": "node src/feishu-test-connection.mjs",
     "hubstudio:test": "node src/hubstudio-test-connection.mjs",
     "hubstudio:open": "node src/hubstudio-open-browser.mjs",
