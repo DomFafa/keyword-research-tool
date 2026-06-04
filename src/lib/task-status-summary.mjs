@@ -29,6 +29,11 @@ function existingStatus(taskRow, key) {
   return trim(taskRow?.record?.[key]);
 }
 
+function semCollectionCompleted(taskRow) {
+  const status = existingStatus(taskRow, "SEM完成状态");
+  return /^已完成\d+个关键词采集$/.test(status) || status === "已完成关键词采集";
+}
+
 function ratingSummary(rows) {
   const total = rows.length;
   const countA = countWhere(rows, (row) => trim(row.record["评级"]) === "A");
@@ -63,6 +68,7 @@ export function summarizeTaskStatus(taskRow, keywordRows) {
   const secondBingContinueRows = rows.filter((row) => trim(row.record["bing二次判断"]) === "继续");
   const ratingARows = rows.filter((row) => trim(row.record["评级"]) === "A");
   const agentStarted = secondBingContinueRows.length > 0;
+  const zeroCandidateFlowCompleted = semCollectionCompleted(taskRow) && machineContinueRows.length === 0;
 
   const threeMDone = countWhere(machineContinueRows, (row) => hasValue(row, "3M展示"));
   const secondDone = countWhere(initialBingContinueRows, (row) => hasValue(row, "bing二次判断"));
@@ -76,16 +82,16 @@ export function summarizeTaskStatus(taskRow, keywordRows) {
     : agentStarted ? progress(agentDone, secondBingContinueRows.length) : existingStatus(taskRow, "Agent 判断流程");
 
   return {
-    "3M采集状态": machineContinueRows.length > 0
+    "3M采集状态": machineContinueRows.length > 0 || zeroCandidateFlowCompleted
       ? progress(threeMDone, machineContinueRows.length)
       : existingStatus(taskRow, "3M采集状态"),
-    "二次判断状态": initialBingContinueRows.length > 0
+    "二次判断状态": initialBingContinueRows.length > 0 || zeroCandidateFlowCompleted
       ? progress(secondDone, initialBingContinueRows.length)
       : existingStatus(taskRow, "二次判断状态"),
-    "国家采集状态": agentStarted || ratingARows.length > 0
+    "国家采集状态": agentStarted || ratingARows.length > 0 || zeroCandidateFlowCompleted
       ? progress(countryDone, ratingARows.length)
       : existingStatus(taskRow, "国家采集状态"),
-    "Agent 判断流程": agentStatus
+    "Agent 判断流程": zeroCandidateFlowCompleted ? progress(0, 0) : agentStatus
   };
 }
 

@@ -161,6 +161,21 @@ test("task status summary preserves existing zero progress for stages already re
   });
 });
 
+test("task status summary records zero progress when Semrush completed with no candidates", () => {
+  const task = row(2, {
+    "词根": "zero",
+    "关键词": "",
+    "SEM完成状态": "已完成0个关键词采集"
+  });
+
+  assert.deepEqual(summarizeTaskStatus(task, []), {
+    "3M采集状态": "已完成0个，总数0个",
+    "二次判断状态": "已完成0个，总数0个",
+    "国家采集状态": "已完成0个，总数0个",
+    "Agent 判断流程": "已完成0个，总数0个"
+  });
+});
+
 test("task status summary reports completed agent rating distribution", () => {
   const task = row(2, { "词根": "generator", "关键词": "" });
   const keywordRows = [
