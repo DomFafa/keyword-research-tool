@@ -1,5 +1,6 @@
 export const WORKSPACE_BUSINESS_URL = "https://workspace.google.com/business/";
 export const WORKSPACE_BUY_PATH = "/business/signup/buy";
+export const WORKSPACE_BUY_CONFIRM_PATH = "/business/signup/buyconfirm";
 
 export const WORKSPACE_PAGE_STATES = {
   LANDING: "landing",
@@ -7,6 +8,7 @@ export const WORKSPACE_PAGE_STATES = {
   CONTACT: "contact",
   SIGNUP_TYPE_SELECT: "signup_type_select",
   BUY: "buy",
+  BUY_CONFIRM: "buy_confirm",
   UNKNOWN: "unknown"
 };
 
@@ -86,6 +88,9 @@ export function detectWorkspacePageState(url) {
   if (path === WORKSPACE_BUY_PATH) {
     return WORKSPACE_PAGE_STATES.BUY;
   }
+  if (path === WORKSPACE_BUY_CONFIRM_PATH) {
+    return WORKSPACE_PAGE_STATES.BUY_CONFIRM;
+  }
   if (path === "/business/signup/signuptypeselect") {
     return WORKSPACE_PAGE_STATES.SIGNUP_TYPE_SELECT;
   }
@@ -116,6 +121,7 @@ export function buildWorkspaceSnapshotExpression() {
     const path = location.pathname.replace(/\\/+$/, "") || "/";
     let state = "unknown";
     if (path === "/business/signup/buy") state = "buy";
+    else if (path === "/business/signup/buyconfirm") state = "buy_confirm";
     else if (path === "/business/signup/signuptypeselect") state = "signup_type_select";
     else if (path === "/business/signup/contact") state = "contact";
     else if (path === "/business/signup/welcome") state = "welcome";

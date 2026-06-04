@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readArg } from "./lib/args.mjs";
+import { readArg, readFlag } from "./lib/args.mjs";
 import {
   attachChromePage,
   CdpClient,
@@ -15,6 +15,8 @@ import {
   ensureChromeProfileTargetWithCdp,
   findChromeProfile
 } from "./lib/chrome-profiles.mjs";
+import { loadDotEnv } from "./lib/env.mjs";
+import { batchUpdateSheetValues, getSheetValues } from "./lib/google-sheets-api.mjs";
 import {
   DEFAULT_SHEET_URL,
   getRequiredValueByAliases
@@ -24,6 +26,7 @@ import {
   readSheetInSession
 } from "./lib/google-sheet.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
+import { columnName, headerIndex, valuesToTable } from "./lib/table-utils.mjs";
 import {
   buildWorkspaceSnapshotExpression,
   GET_STARTED_LABELS,
@@ -31,10 +34,22 @@ import {
   WORKSPACE_BUSINESS_URL,
   WORKSPACE_PAGE_STATES
 } from "./lib/workspace-domain-page.mjs";
+import {
+  buildDomainCandidates,
+  DOMAIN_NOT_FOUND_STATUS,
+  isWorkspaceNoLongerAvailableMessage,
+  parseWorkspaceDomainConfirmation,
+  selectDomainResearchRows
+} from "./lib/workspace-domain-research.mjs";
 
 const DEFAULT_BUSINESS_NAME = "compound interest calculator";
 const DEFAULT_REGION = "Türkiye";
 const DEFAULT_OUTPUT = "output/workspace-domain-page.json";
+const DEFAULT_KEYWORD_SHEET = "关键词总表";
+const DOMAIN_RECOMMENDATION_HEADER = "域名推荐";
+const DOMAIN_PRICE_HEADER = "价格";
+
+loadDotEnv();
 
 function json(value) {
   return JSON.stringify(value);
@@ -478,14 +493,328 @@ async function advanceWorkspacePage(cdp, page, options) {
   };
 }
 
+function quoteSheetName(sheetName) {
+  return `'${String(sheetName).replaceAll("'", "''")}'`;
+}
+
+async function readKeywordTable({ sheetUrl, keywordSheet }) {
+  const result = await getSheetValues({
+    sheetUrl,
+    range: `${keywordSheet}!A:ZZ`
+  });
+  if (!result.ok) {
+    throw new Error(`读取 ${keywordSheet} 失败: ${result.reason || result.status || "unknown_error"}`);
+  }
+  const table = valuesToTable(result.values || []);
+  for (const header of ["关键词", "评级", DOMAIN_RECOMMENDATION_HEADER, DOMAIN_PRICE_HEADER]) {
+    headerIndex(table.headers, header, keywordSheet);
+  }
+  return table;
+}
+
+async function ensureDomainSearchPage(cdp, page, options) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const current = await snapshot(cdp, page.sessionId);
+    if (current.state === WORKSPACE_PAGE_STATES.BUY) {
+      return current;
+    }
+    if (current.state === WORKSPACE_PAGE_STATES.BUY_CONFIRM) {
+      await evaluate(cdp, page.sessionId, "history.back()", 10000).catch(() => {});
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 20000) {
+        const next = await snapshot(cdp, page.sessionId).catch(() => null);
+        if (next?.state === WORKSPACE_PAGE_STATES.BUY) {
+          return next;
+        }
+        await sleep(500);
+      }
+    }
+    const result = await advanceWorkspacePage(cdp, page, options);
+    if (result.ok) {
+      return snapshot(cdp, page.sessionId);
+    }
+  }
+  const current = await snapshot(cdp, page.sessionId).catch(() => null);
+  throw new Error(`Unable to return to domain search page. state=${current?.state || ""} url=${current?.url || ""}`);
+}
+
+function domainSearchExpression(domain) {
+  return pageActionExpression(`
+    const wanted = ${json(domain)};
+    const inputs = [...document.querySelectorAll("input")].filter(visible);
+    const input = inputs.find((el) => /domain|business name|search/i.test([el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.name].filter(Boolean).join(" ")))
+      || inputs.find((el) => el.type === "text" || el.type === "search")
+      || inputs[0];
+    if (!input) return { ok: false, reason: "domain search input not found" };
+    const setter = Object.getOwnPropertyDescriptor(input.constructor.prototype, "value")?.set;
+    input.focus();
+    if (setter) setter.call(input, wanted);
+    else input.value = wanted;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: wanted }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    const rect = input.getBoundingClientRect();
+    return {
+      ok: true,
+      value: clean(input.value),
+      point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    };
+  `);
+}
+
+async function submitDomainSearch(cdp, sessionId, domain) {
+  await cdp.send("Page.bringToFront", {}, sessionId).catch(() => {});
+  const prepared = await evaluate(cdp, sessionId, domainSearchExpression(domain), 15000);
+  if (!prepared?.ok) {
+    throw new Error(prepared?.reason || "Unable to set domain search input");
+  }
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  }, sessionId);
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  }, sessionId);
+  return prepared;
+}
+
+function domainResultExpression(domain) {
+  return pageActionExpression(`
+    const expected = ${json(domain.toLowerCase())};
+    const escaped = expected.replace(/[-/\\\\^$*+?.()|[\\]{}]/g, "\\\\$&");
+    const exactPattern = new RegExp("(^|\\\\s)" + escaped + "($|\\\\s)", "i");
+    const rows = [...document.querySelectorAll("[role='row'], [role='option'], li, tr, div")]
+      .filter(visible)
+      .map((el) => ({ el, text: clean(el.innerText || el.textContent) }))
+      .filter((item) => item.text && item.text.length <= 240 && exactPattern.test(item.text));
+    const exact = rows.find((item) => lower(item.text).includes(expected));
+    if (!exact) {
+      return { ok: false, state: "pending", reason: "exact domain row not found" };
+    }
+    if (/unavailable/i.test(exact.text)) {
+      return { ok: true, state: "unavailable", text: exact.text };
+    }
+    if (/\\/year/i.test(exact.text) || /available/i.test(exact.text)) {
+      clickElement(exact.el);
+      return { ok: true, state: "selected", text: exact.text };
+    }
+    return { ok: false, state: "pending", text: exact.text, reason: "exact row has no availability signal" };
+  `);
+}
+
+async function inspectDomainResult(cdp, sessionId, domain) {
+  const current = await snapshot(cdp, sessionId);
+  if (current.state === WORKSPACE_PAGE_STATES.BUY_CONFIRM) {
+    return {
+      state: "available",
+      ...parseWorkspaceDomainConfirmation(current.bodyText, domain)
+    };
+  }
+  if (current.state !== WORKSPACE_PAGE_STATES.BUY) {
+    return { state: "pending", reason: `unexpected page state ${current.state}` };
+  }
+  if (isWorkspaceNoLongerAvailableMessage(current.bodyText)) {
+    return {
+      state: "unavailable",
+      text: "The selected domain name is no longer available."
+    };
+  }
+  const result = await evaluate(cdp, sessionId, domainResultExpression(domain), 15000);
+  if (result?.state === "unavailable") {
+    return { state: "unavailable", text: result.text };
+  }
+  if (result?.state === "selected") {
+    return { state: "selected", text: result.text };
+  }
+  return { state: "pending", reason: result?.reason || "result pending", text: result?.text || "" };
+}
+
+async function searchDomainCandidate(cdp, page, domain, options) {
+  await ensureDomainSearchPage(cdp, page, options);
+  await submitDomainSearch(cdp, page.sessionId, domain);
+
+  const attempts = [];
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 45000) {
+    const result = await inspectDomainResult(cdp, page.sessionId, domain).catch((error) => ({
+      state: "pending",
+      reason: error.message
+    }));
+    attempts.push(result);
+    if (result.state === "available" && result.available) {
+      return {
+        available: true,
+        domain: result.domain || domain,
+        price: result.price || "",
+        attempts
+      };
+    }
+    if (result.state === "unavailable") {
+      return {
+        available: false,
+        domain,
+        price: "",
+        reason: "unavailable",
+        attempts
+      };
+    }
+    await sleep(result.state === "selected" ? 1000 : 700);
+  }
+  return {
+    available: false,
+    domain,
+    price: "",
+    reason: "timeout",
+    attempts
+  };
+}
+
+async function writeDomainResult({
+  sheetUrl,
+  keywordSheet,
+  keywordTable,
+  rowNumber,
+  domainRecommendation,
+  price,
+  dryRun
+}) {
+  const domainColumn = columnName(headerIndex(keywordTable.headers, DOMAIN_RECOMMENDATION_HEADER, keywordSheet));
+  const priceColumn = columnName(headerIndex(keywordTable.headers, DOMAIN_PRICE_HEADER, keywordSheet));
+  const data = [
+    {
+      range: `${quoteSheetName(keywordSheet)}!${domainColumn}${rowNumber}:${domainColumn}${rowNumber}`,
+      values: [[domainRecommendation]]
+    },
+    {
+      range: `${quoteSheetName(keywordSheet)}!${priceColumn}${rowNumber}:${priceColumn}${rowNumber}`,
+      values: [[price || ""]]
+    }
+  ];
+  if (dryRun) {
+    return {
+      skipped: true,
+      dryRun: true,
+      data
+    };
+  }
+  const result = await batchUpdateSheetValues({
+    sheetUrl,
+    data
+  });
+  return {
+    ...result,
+    data
+  };
+}
+
+async function runDomainResearch({
+  cdp,
+  page,
+  sheetUrl,
+  keywordSheet,
+  force,
+  limit,
+  fromRow,
+  toRow,
+  dryRun,
+  writeDelayMs,
+  workspaceOptions
+}) {
+  const keywordTable = await readKeywordTable({
+    sheetUrl,
+    keywordSheet
+  });
+  const { selected, skipped } = selectDomainResearchRows(keywordTable.rows, {
+    fromRow,
+    toRow,
+    limit,
+    force
+  });
+
+  const rows = [];
+  for (const row of selected) {
+    const keyword = String(row.record?.["关键词"] || "").trim();
+    const candidates = buildDomainCandidates(keyword);
+    const attempts = [];
+    let domainRecommendation = DOMAIN_NOT_FOUND_STATUS;
+    let price = "";
+
+    for (const candidate of candidates) {
+      console.log(`[domain] row ${row.rowNumber} ${keyword}: try ${candidate}`);
+      const result = await searchDomainCandidate(cdp, page, candidate, workspaceOptions);
+      attempts.push({
+        candidate,
+        available: result.available,
+        price: result.price,
+        reason: result.reason || "",
+        lastState: result.attempts.at(-1)?.state || ""
+      });
+      if (result.available) {
+        domainRecommendation = result.domain || candidate;
+        price = result.price || "";
+        break;
+      }
+    }
+
+    const writeResult = await writeDomainResult({
+      sheetUrl,
+      keywordSheet,
+      keywordTable,
+      rowNumber: row.rowNumber,
+      domainRecommendation,
+      price,
+      dryRun
+    });
+    if (!writeResult.ok && !writeResult.dryRun) {
+      throw new Error(`写入第 ${row.rowNumber} 行域名推荐失败: ${writeResult.reason || writeResult.status || "unknown_error"}`);
+    }
+
+    rows.push({
+      rowNumber: row.rowNumber,
+      keyword,
+      candidates,
+      attempts,
+      domainRecommendation,
+      price,
+      writeResult
+    });
+    await ensureDomainSearchPage(cdp, page, workspaceOptions).catch(() => {});
+    if (writeDelayMs > 0) {
+      await sleep(writeDelayMs);
+    }
+  }
+
+  return {
+    selectedRows: selected.length,
+    updatedRows: dryRun ? 0 : rows.filter((row) => row.writeResult?.ok).length,
+    skippedRows: skipped.length,
+    skipped,
+    rows
+  };
+}
+
 async function main() {
   const sheetUrl = readArg("sheet", process.env.GOOGLE_SHEET_URL || DEFAULT_SHEET_URL);
   const accountSheetName = readArg("account-sheet", "工具账号密码");
+  const keywordSheet = readArg("keyword-sheet", DEFAULT_KEYWORD_SHEET);
   const startUrl = readArg("start-url", WORKSPACE_BUSINESS_URL);
   const businessName = readArg("business-name", DEFAULT_BUSINESS_NAME);
   const region = readArg("region", DEFAULT_REGION);
   const output = readArg("out", DEFAULT_OUTPUT);
   const maxSteps = Number(readArg("max-steps", "8"));
+  const researchDomains = readFlag("research-domains");
+  const dryRun = readFlag("dry-run");
+  const force = readFlag("force");
+  const limit = Number(readArg("limit", "20"));
+  const fromRow = Number(readArg("from-row", "0"));
+  const toRow = Number(readArg("to-row", "0"));
+  const writeDelayMs = Number(readArg("write-delay-ms", "1200"));
 
   const cdp = new CdpClient(readChromeWebSocketEndpoint());
   await cdp.connect();
@@ -503,18 +832,42 @@ async function main() {
     page = await attachChromePage(cdp, target.targetId);
     await maximizeChromeWindow(cdp, page.targetId);
 
-    const result = await advanceWorkspacePage(cdp, page, {
+    const workspaceOptions = {
       businessName,
       region,
       maxSteps: Number.isFinite(maxSteps) && maxSteps > 0 ? maxSteps : 8
-    });
+    };
+    const result = await advanceWorkspacePage(cdp, page, workspaceOptions);
+    let domainResearch = null;
+    if (result.ok && researchDomains) {
+      domainResearch = await runDomainResearch({
+        cdp,
+        page,
+        sheetUrl,
+        keywordSheet,
+        force,
+        limit: Number.isFinite(limit) && limit >= 0 ? limit : 20,
+        fromRow: Number.isFinite(fromRow) && fromRow > 0 ? fromRow : 0,
+        toRow: Number.isFinite(toRow) && toRow > 0 ? toRow : 0,
+        dryRun,
+        writeDelayMs: Number.isFinite(writeDelayMs) && writeDelayMs > 0 ? writeDelayMs : 0,
+        workspaceOptions
+      });
+    }
     const payload = {
       source: {
         sheetUrl,
         accountSheetName,
+        keywordSheet,
         startUrl,
         businessName,
         region,
+        researchDomains,
+        dryRun,
+        force,
+        limit: Number.isFinite(limit) && limit >= 0 ? limit : 20,
+        fromRow: Number.isFinite(fromRow) && fromRow > 0 ? fromRow : 0,
+        toRow: Number.isFinite(toRow) && toRow > 0 ? toRow : 0,
         readAt: new Date().toISOString()
       },
       browserAccount: config.browserAccount,
@@ -523,7 +876,8 @@ async function main() {
         name: config.chromeProfile.name,
         email: config.chromeProfile.email
       },
-      result
+      result,
+      domainResearch
     };
     await fs.mkdir(path.dirname(output), { recursive: true });
     await fs.writeFile(output, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
@@ -532,7 +886,11 @@ async function main() {
     if (!result.ok) {
       throw new Error(`Workspace domain page was not reached. Final state=${result.state} url=${result.url}`);
     }
-    console.log(`Workspace domain page ready: ${result.url}`);
+    if (domainResearch) {
+      console.log(`Domain research rows: selected=${domainResearch.selectedRows}, updated=${domainResearch.updatedRows}, skipped=${domainResearch.skippedRows}`);
+    } else {
+      console.log(`Workspace domain page ready: ${result.url}`);
+    }
   } finally {
     if (page) {
       await detachChromePage(cdp, page.sessionId).catch(() => {});

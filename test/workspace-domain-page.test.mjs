@@ -30,6 +30,10 @@ test("detectWorkspacePageState maps Google Workspace signup URLs", () => {
     detectWorkspacePageState("https://workspace.google.com/business/signup/buy?hl=en"),
     WORKSPACE_PAGE_STATES.BUY
   );
+  assert.equal(
+    detectWorkspacePageState("https://workspace.google.com/business/signup/buyconfirm?hl=en"),
+    WORKSPACE_PAGE_STATES.BUY_CONFIRM
+  );
 });
 
 test("isWorkspaceBuyPage only matches the domain-buy target page", () => {
