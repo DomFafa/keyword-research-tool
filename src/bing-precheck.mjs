@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   attachChromePage,
   CdpClient,
@@ -38,6 +39,9 @@ import { readArg, readFlag } from "./lib/args.mjs";
 import { findChromeProfile, openChromeProfileUrl } from "./lib/chrome-profiles.mjs";
 import { readFeishuBingRegistry } from "./lib/feishu-registry.mjs";
 import {
+  batchUpdateSheet,
+  batchUpdateSheetValues,
+  buildCellBackgroundRequests,
   formatCellBackgrounds,
   getSheetValues,
   updateSheetValues
@@ -49,6 +53,9 @@ const ACCOUNT_SHEET = "工具账号密码";
 const TASK_SHEET = "词根拓展";
 const KEYWORD_TOTAL_SHEET = "关键词总表";
 const DEFAULT_SITE_URL = "https://2fafree.com/";
+const WHITE_BACKGROUND = { red: 1, green: 1, blue: 1 };
+const RED_BACKGROUND = { red: 1, green: 0, blue: 0 };
+const PENDING_BACKGROUND = { red: 1, green: 0.9, blue: 0 };
 
 function columnName(index) {
   let value = index + 1;
@@ -345,6 +352,132 @@ function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function isQuotaLimitedSheetResult(result) {
+  const reason = String(result?.reason || "");
+  return result?.status === 429 || /quota|rate|too many/i.test(reason);
+}
+
+async function retrySheetWrite(operation, {
+  label,
+  maxAttempts = 5,
+  delayMs = 65000
+}) {
+  let lastResult;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    lastResult = await operation();
+    if (lastResult.ok) {
+      return lastResult;
+    }
+    if (!isQuotaLimitedSheetResult(lastResult) || attempt >= maxAttempts) {
+      return lastResult;
+    }
+    const waitMs = delayMs + (attempt - 1) * 10000;
+    console.warn(`${label} 触发限流，等待 ${Math.round(waitMs / 1000)} 秒后重试 (${attempt}/${maxAttempts})`);
+    await sleep(waitMs);
+  }
+  return lastResult;
+}
+
+export function createSheetWriteQueue({
+  sheetUrl,
+  sheetId,
+  outDir,
+  batchSize = 25,
+  retryDelayMs = 65000
+}) {
+  const valueWrites = [];
+  const formatWrites = [];
+
+  const pendingCount = () => valueWrites.length;
+  const persistPending = async (error, reason) => {
+    await fs.mkdir(outDir, { recursive: true });
+    await writeJson(`${outDir}/pending-sheet-writes.json`, {
+      reason,
+      error: error?.message || String(error || ""),
+      valueWrites,
+      formatWrites,
+      savedAt: new Date().toISOString()
+    });
+  };
+
+  return {
+    enqueueRow({ rowNumber, headers, values }) {
+      const endColumn = columnName(Math.max(headers.length, values.length) - 1);
+      const range = `${KEYWORD_TOTAL_SHEET}!A${rowNumber}:${endColumn}${rowNumber}`;
+      valueWrites.push({
+        rowNumber,
+        range,
+        values: [values.slice(0, Math.max(headers.length, values.length))]
+      });
+      return { queued: true, range };
+    },
+    enqueueBackgrounds({ cells, color }) {
+      if (!cells.length) {
+        return { skipped: true, reason: "no_cells" };
+      }
+      for (const cell of cells) {
+        formatWrites.push({ cell, color });
+      }
+      return { queued: true, cells: cells.length };
+    },
+    pendingCount,
+    shouldFlush() {
+      return pendingCount() >= batchSize;
+    },
+    async flush(reason = "manual") {
+      if (valueWrites.length === 0 && formatWrites.length === 0) {
+        return { skipped: true, reason: "empty_queue" };
+      }
+      const pendingValues = valueWrites.splice(0);
+      const pendingFormats = formatWrites.splice(0);
+      try {
+        let valueResult = { skipped: true, reason: "no_value_writes" };
+        if (pendingValues.length > 0) {
+          valueResult = await retrySheetWrite(
+            () => batchUpdateSheetValues({
+              sheetUrl,
+              data: pendingValues.map(({ range, values }) => ({ range, values }))
+            }),
+            { label: `批量写入 ${pendingValues.length} 行`, delayMs: retryDelayMs }
+          );
+          if (!valueResult.ok) {
+            throw new Error(valueResult.reason || "batch_value_write_failed");
+          }
+        }
+
+        let formatResult = { skipped: true, reason: "no_format_writes" };
+        if (pendingFormats.length > 0) {
+          const requests = pendingFormats.flatMap(({ cell, color }) =>
+            buildCellBackgroundRequests({ sheetId, cells: [cell], color })
+          );
+          formatResult = await retrySheetWrite(
+            () => batchUpdateSheet({ sheetUrl, requests }),
+            { label: `批量格式化 ${pendingFormats.length} 个单元格`, delayMs: retryDelayMs }
+          );
+          if (!formatResult.ok) {
+            throw new Error(formatResult.reason || "batch_format_write_failed");
+          }
+        }
+
+        return {
+          ok: true,
+          reason,
+          valueRows: pendingValues.length,
+          formatCells: pendingFormats.length,
+          valueResult,
+          formatResult
+        };
+      } catch (error) {
+        valueWrites.unshift(...pendingValues);
+        formatWrites.unshift(...pendingFormats);
+        await persistPending(error, reason).catch(() => {});
+        error.name = "SheetWriteQueueError";
+        throw error;
+      }
+    }
+  };
+}
+
 async function closeDuplicateBingTabs(cdp, keepTargetId, siteUrl) {
   const { targetInfos = [] } = await cdp.send("Target.getTargets");
   const duplicates = targetInfos.filter(
@@ -543,7 +676,10 @@ function buildKeywordTotalChromeUpdates(keywordHeaders, keywordRow, chromePreche
   return existing;
 }
 
-async function writeKeywordTotalRow({ sheetUrl, rowNumber, headers, values }) {
+async function writeKeywordTotalRow({ sheetUrl, rowNumber, headers, values, writeQueue }) {
+  if (writeQueue) {
+    return writeQueue.enqueueRow({ rowNumber, headers, values });
+  }
   const endColumn = columnName(Math.max(headers.length, values.length) - 1);
   const result = await updateSheetValues({
     sheetUrl,
@@ -554,6 +690,19 @@ async function writeKeywordTotalRow({ sheetUrl, rowNumber, headers, values }) {
     throw new Error(`写入 ${KEYWORD_TOTAL_SHEET} 第 ${rowNumber} 行失败: ${result.reason || "unknown error"}`);
   }
   return result;
+}
+
+async function formatCellBackgroundsOrQueue({
+  writeQueue,
+  sheetUrl,
+  sheetId,
+  cells,
+  color = RED_BACKGROUND
+}) {
+  if (writeQueue) {
+    return writeQueue.enqueueBackgrounds({ cells, color });
+  }
+  return formatCellBackgrounds({ sheetUrl, sheetId, cells, color });
 }
 
 async function processKeywordRow({
@@ -568,7 +717,8 @@ async function processKeywordRow({
   bingApiKey,
   useBingApiMetrics,
   bingApiCountryConcurrency,
-  bingApiCountryRequestDelayMs
+  bingApiCountryRequestDelayMs,
+  writeQueue
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const minImpressions = rule.record["bing最低展示量"] || "";
@@ -611,7 +761,8 @@ async function processKeywordRow({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
     headers: keywordTable.headers,
-    values
+    values,
+    writeQueue
   });
 
   const redCells = [];
@@ -619,11 +770,12 @@ async function processKeywordRow({
     { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "3M展示") },
     { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "top5根域名数量") }
   ];
-  await formatCellBackgrounds({
+  await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
     cells: ruleCells,
-    color: { red: 1, green: 1, blue: 1 }
+    color: WHITE_BACKGROUND
   }).catch(() => ({ skipped: true }));
 
   if (precheck.impressionFailed) {
@@ -632,16 +784,19 @@ async function processKeywordRow({
   if (precheck.top5DomainFailed) {
     redCells.push(ruleCells[1]);
   }
-  const formatResult = await formatCellBackgrounds({
+  const formatResult = await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: redCells
+    cells: redCells,
+    color: RED_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
-  const pendingFormatResult = await formatCellBackgrounds({
+  const pendingFormatResult = await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
     cells: precheck.top5DomainPending ? [ruleCells[1]] : [],
-    color: { red: 1, green: 0.9, blue: 0 }
+    color: PENDING_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
   return {
@@ -666,7 +821,8 @@ async function processKeywordRowApiOnly({
   rule,
   bingApiKey,
   bingApiCountryConcurrency,
-  bingApiCountryRequestDelayMs
+  bingApiCountryRequestDelayMs,
+  writeQueue
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const minImpressions = rule.record["bing最低展示量"] || "";
@@ -686,21 +842,25 @@ async function processKeywordRowApiOnly({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
     headers: keywordTable.headers,
-    values
+    values,
+    writeQueue
   });
 
   const impressionCell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "3M展示") };
-  await formatCellBackgrounds({
+  await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
     cells: [impressionCell],
-    color: { red: 1, green: 1, blue: 1 }
+    color: WHITE_BACKGROUND
   }).catch(() => ({ skipped: true }));
 
-  const formatResult = await formatCellBackgrounds({
+  const formatResult = await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: apiPrecheck.impressionFailed ? [impressionCell] : []
+    cells: apiPrecheck.impressionFailed ? [impressionCell] : [],
+    color: RED_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
   return {
@@ -721,7 +881,8 @@ async function processKeywordRowCountryOnly({
   bingApiKey,
   bingApiCountryCodes,
   bingApiCountryConcurrency,
-  bingApiCountryRequestDelayMs
+  bingApiCountryRequestDelayMs,
+  writeQueue
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const countryTopRows = await getKeywordCountryRows({
@@ -736,7 +897,8 @@ async function processKeywordRowCountryOnly({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
     headers: keywordTable.headers,
-    values
+    values,
+    writeQueue
   });
   return {
     row: keywordRow.rowNumber,
@@ -838,7 +1000,8 @@ async function processKeywordRowChromeOnly({
   keywordTotalGid,
   keywordTable,
   keywordRow,
-  rule
+  rule,
+  writeQueue
 }) {
   const keyword = String(keywordRow.record["关键词"] || "").trim();
   const maxTop5Domains = rule.record["Max root on Bing top 5url"] || "";
@@ -855,27 +1018,32 @@ async function processKeywordRowChromeOnly({
     sheetUrl,
     rowNumber: keywordRow.rowNumber,
     headers: keywordTable.headers,
-    values
+    values,
+    writeQueue
   });
 
   const top5Cell = { row: keywordRow.rowNumber, column: headerIndex(keywordTable.headers, "top5根域名数量") };
-  await formatCellBackgrounds({
+  await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
     cells: [top5Cell],
-    color: { red: 1, green: 1, blue: 1 }
+    color: WHITE_BACKGROUND
   }).catch(() => ({ skipped: true }));
 
-  const formatResult = await formatCellBackgrounds({
+  const formatResult = await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
-    cells: chromePrecheck.top5DomainFailed ? [top5Cell] : []
+    cells: chromePrecheck.top5DomainFailed ? [top5Cell] : [],
+    color: RED_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
-  const pendingFormatResult = await formatCellBackgrounds({
+  const pendingFormatResult = await formatCellBackgroundsOrQueue({
+    writeQueue,
     sheetUrl,
     sheetId: keywordTotalGid,
     cells: chromePrecheck.top5DomainPending ? [top5Cell] : [],
-    color: { red: 1, green: 0.9, blue: 0 }
+    color: PENDING_BACKGROUND
   }).catch((error) => ({ ok: false, reason: error.message || String(error) }));
 
   return {
@@ -921,6 +1089,8 @@ async function main() {
   const bingApiCountryCodes = parseCountryCodes(readArg("bing-api-countries", ""));
   const bingApiCountryConcurrency = Number(readArg("bing-api-country-concurrency", "8")) || 8;
   const bingApiCountryRequestDelayMs = Number(readArg("bing-api-country-request-delay-ms", "0")) || 0;
+  const sheetWriteBatchSize = Number(readArg("sheet-write-batch-size", "25")) || 25;
+  const sheetWriteRetryDelayMs = Number(readArg("sheet-write-retry-delay-ms", "65000")) || 65000;
 
   const fromRow = Number(rowArg || fromRowArg || "0") || 0;
   const toRow = Number(rowArg || toRowArg || "0") || 0;
@@ -940,6 +1110,8 @@ async function main() {
 
   let cdp = apiOnly ? null : await connectChromeCdpWithRecovery();
   let page;
+  let writeQueue;
+  let finalFlushCompleted = false;
   try {
     const [accountTable, taskTable, keywordTable] = await Promise.all([
       readRequiredSheet(sheetUrl, `${ACCOUNT_SHEET}!A:Z`),
@@ -984,6 +1156,13 @@ async function main() {
     console.log(`Bing metric source: ${bingApiKeys.length ? `official API (${bingApiSource}, ${bingApiKeys.length} key(s))` : "browser page"}`);
     console.log(`Mode: ${countryOnly ? "agent-a-country-only" : chromeOnly ? "chrome-only" : apiOnly ? "api-only" : "api+chrome"}`);
     console.log(`Country breakdown: ${countryOnly ? "agent A only" : "disabled"}`);
+    writeQueue = createSheetWriteQueue({
+      sheetUrl,
+      sheetId: keywordTotalGid,
+      outDir,
+      batchSize: sheetWriteBatchSize,
+      retryDelayMs: sheetWriteRetryDelayMs
+    });
 
     if (apiOnly && bingApiKeys.length === 0) {
       throw new Error("api-only 模式需要飞书 api 注册中的 bing webmaster api、secrets/bing-webmaster-api-key.txt 或 BING_WEBMASTER_API_KEY");
@@ -1049,9 +1228,10 @@ async function main() {
                     sheetUrl,
                     siteUrl,
                     keywordTotalGid,
-                    keywordTable,
-                    keywordRow,
-                    rule
+                  keywordTable,
+                  keywordRow,
+                    rule,
+                    writeQueue
                   });
                   break;
                 } catch (error) {
@@ -1086,7 +1266,8 @@ async function main() {
                 bingApiKey: currentBingApiKey(),
                 bingApiCountryCodes,
                 bingApiCountryConcurrency,
-                bingApiCountryRequestDelayMs
+                bingApiCountryRequestDelayMs,
+                writeQueue
               });
               break;
             } catch (error) {
@@ -1123,7 +1304,8 @@ async function main() {
                 rule,
                 bingApiKey: currentBingApiKey(),
                 bingApiCountryConcurrency,
-                bingApiCountryRequestDelayMs
+                bingApiCountryRequestDelayMs,
+                writeQueue
               });
               break;
             } catch (error) {
@@ -1164,7 +1346,8 @@ async function main() {
                     bingApiKey: currentBingApiKey(),
                     useBingApiMetrics,
                     bingApiCountryConcurrency,
-                    bingApiCountryRequestDelayMs
+                    bingApiCountryRequestDelayMs,
+                    writeQueue
                   });
                   break;
                 } catch (error) {
@@ -1190,8 +1373,15 @@ async function main() {
         }
         summaries.push(summary);
         console.log(`Row ${summary.row}: ${summary.keyword} -> ${summary.judgement}, 3M=${summary.impressions}${apiOnly ? "" : `, top5=${summary.top5DomainCount}`}`);
+        if (writeQueue.shouldFlush()) {
+          const flushResult = await writeQueue.flush(`batch_at_row_${summary.row}`);
+          console.log(`Flushed ${flushResult.valueRows || 0} row write(s), ${flushResult.formatCells || 0} format cell(s).`);
+        }
         await sleep(randomInt(Math.min(minDelayMs, maxDelayMs), Math.max(minDelayMs, maxDelayMs)));
       } catch (error) {
+        if (error?.name === "SheetWriteQueueError") {
+          throw error;
+        }
         summaries.push({
           row: keywordRow.rowNumber,
           keyword: keywordRow.record["关键词"] || "",
@@ -1211,6 +1401,12 @@ async function main() {
       }
     }
 
+    const finalFlushResult = await writeQueue.flush("final");
+    finalFlushCompleted = true;
+    if (!finalFlushResult.skipped) {
+      console.log(`Final flush ${finalFlushResult.valueRows || 0} row write(s), ${finalFlushResult.formatCells || 0} format cell(s).`);
+    }
+
     await fs.mkdir(outDir, { recursive: true });
     await writeJson(`${outDir}/last-run-summary.json`, {
       sheetUrl,
@@ -1224,6 +1420,11 @@ async function main() {
     });
     console.log(`Run summary: ${summaries.length} row(s) handled.`);
   } finally {
+    if (writeQueue && !finalFlushCompleted && writeQueue.pendingCount() > 0) {
+      await writeQueue.flush("finally").catch((error) => {
+        console.error(`Final write queue flush failed: ${error.message || String(error)}`);
+      });
+    }
     if (page?.sessionId && cdp) {
       await detachChromePage(cdp, page.sessionId).catch(() => {});
     }
@@ -1231,7 +1432,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.stack || error.message || String(error));
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((error) => {
+    console.error(error.stack || error.message || String(error));
+    process.exitCode = 1;
+  });
+}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createSheetWriteQueue } from "../src/bing-precheck.mjs";
 import {
   competitionKeyFromUrl,
   evaluateBingPrecheck,
@@ -106,4 +107,28 @@ test("sortCountryBreakdown ranks countries by impressions", () => {
     ]).map((row) => row.country),
     ["United States", "India", "Germany"]
   );
+});
+
+test("createSheetWriteQueue batches row writes before flushing", () => {
+  const queue = createSheetWriteQueue({
+    sheetUrl: "https://docs.google.com/spreadsheets/d/test/edit",
+    sheetId: "999267438",
+    outDir: "agent-outputs/test-write-queue",
+    batchSize: 2
+  });
+
+  assert.deepEqual(
+    queue.enqueueRow({ rowNumber: 5, headers: ["词根", "关键词"], values: ["root", "keyword"] }),
+    { queued: true, range: "关键词总表!A5:B5" }
+  );
+  assert.equal(queue.pendingCount(), 1);
+  assert.equal(queue.shouldFlush(), false);
+  assert.deepEqual(
+    queue.enqueueBackgrounds({ cells: [], color: { red: 1, green: 0, blue: 0 } }),
+    { skipped: true, reason: "no_cells" }
+  );
+
+  queue.enqueueRow({ rowNumber: 6, headers: ["词根", "关键词"], values: ["root", "keyword 2"] });
+  assert.equal(queue.pendingCount(), 2);
+  assert.equal(queue.shouldFlush(), true);
 });
