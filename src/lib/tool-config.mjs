@@ -1,35 +1,41 @@
-import {
-  ensureChromeProfileTargetWithCdp,
-  findChromeProfile
-} from "./chrome-profiles.mjs";
-import {
-  attachChromePage,
-  createChromePage,
-  detachChromePage,
-  navigateAndWait
-} from "./cdp.mjs";
-import { getGid, getSpreadsheetId, readSheetInSession } from "./google-sheet.mjs";
+import { getSheetValues } from "./google-sheets-api.mjs";
+import { rowsToObjects } from "./csv.mjs";
 
 export const DEFAULT_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/1Ea3mSRW431QP08sq9tn3VoYEkj52hNRzY_GVizVLy3A/edit?gid=0#gid=0";
 
-export function buildProfileWorkUrl(sheetUrl) {
-  const url = new URL(sheetUrl);
-  const marker = `keyword-tool-${Date.now()}`;
-  url.searchParams.set("keyword_tool_run", marker);
-  url.hash = `${url.hash.replace(/^#/, "") || `gid=${getGid(sheetUrl)}`}&${marker}`;
+function sheetRange(sheetName) {
+  return `${sheetName}!A:Z`;
+}
+
+export function parseSheetValues(values, expectedHeaders = []) {
+  const headers = values[0] || [];
+  const missing = expectedHeaders.filter((header) => !headers.includes(header));
+  if (missing.length > 0) {
+    throw new Error(
+      `子表缺少表头: ${missing.join(", ")}. 当前表头: ${headers.join(", ")}`
+    );
+  }
+
   return {
-    marker,
-    url: url.toString()
+    headers,
+    rows: rowsToObjects(values),
+    rawRows: values
   };
 }
 
-function findExistingSheetTarget(targetInfos, spreadsheetId) {
-  return targetInfos.find(
-    (target) =>
-      target.type === "page" &&
-      target.url.includes(`/spreadsheets/d/${spreadsheetId}`)
-  );
+async function readSheetFromApi({ sheetUrl, sheetName, expectedHeaders = [] }) {
+  const result = await getSheetValues({
+    sheetUrl,
+    range: sheetRange(sheetName)
+  });
+  if (!result.ok) {
+    throw new Error(`读取 ${sheetName} 失败: ${result.reason || "unknown error"}`);
+  }
+  return {
+    range: result.range,
+    ...parseSheetValues(result.values || [], expectedHeaders)
+  };
 }
 
 export function getRequiredValue(record, key) {
@@ -92,7 +98,7 @@ export function pickKeywordTask(keywordRows, rowNumber = 2) {
   };
 }
 
-export async function readToolConfig(cdp, options) {
+export async function readToolConfig(options) {
   const {
     sheetUrl,
     accountSheetName = "工具账号密码",
@@ -102,78 +108,31 @@ export async function readToolConfig(cdp, options) {
     requireTask = true
   } = options;
 
-	  let bootstrapPage;
-	  let closeBootstrapPage = false;
-	  let targetPage;
+  const accountSheet = await readSheetFromApi({
+    sheetUrl,
+    sheetName: accountSheetName,
+    expectedHeaders: ["semrush账号", "semrush密码"]
+  });
+  const toolAccount = accountSheet.rows[0] || {};
 
-  try {
-    const spreadsheetId = getSpreadsheetId(sheetUrl);
-    const { targetInfos = [] } = await cdp.send("Target.getTargets");
-	    const existingSheetTarget = findExistingSheetTarget(targetInfos, spreadsheetId);
+  const keywordSheet = await readSheetFromApi({
+    sheetUrl,
+    sheetName: keywordSheetName,
+    expectedHeaders: ["词根", "关键词"]
+  });
 
-    if (existingSheetTarget) {
-      bootstrapPage = await attachChromePage(cdp, existingSheetTarget.targetId);
-    } else {
-      bootstrapPage = await createChromePage(cdp);
-      closeBootstrapPage = true;
-      await navigateAndWait(cdp, bootstrapPage.sessionId, "https://docs.google.com/", 30000);
-    }
+  const keywordTotalSheet = await readSheetFromApi({
+    sheetUrl,
+    sheetName: keywordTotalSheetName,
+    expectedHeaders: ["词根", "关键词", "国家", "搜索量", "KD"]
+  });
 
-    const accountSheet = await readSheetInSession({
-      cdp,
-      sessionId: bootstrapPage.sessionId,
-      sheetUrl,
-      sheetName: accountSheetName,
-      expectedHeaders: ["semrush账号", "semrush密码"]
-    });
-
-    const toolAccount = accountSheet.rows[0] || {};
-    const browserAccount = getRequiredValueByAliases(toolAccount, [
-      "运行浏览器账号",
-      "运行浏览器的账号"
-    ]);
-    const chromeProfile = findChromeProfile(browserAccount);
-
-	    if (existingSheetTarget) {
-	      targetPage = bootstrapPage;
-	    } else {
-	      const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, sheetUrl);
-	      targetPage = await attachChromePage(cdp, target.targetId);
-	    }
-
-    const keywordSheet = await readSheetInSession({
-      cdp,
-      sessionId: targetPage.sessionId,
-      sheetUrl,
-      sheetName: keywordSheetName,
-      expectedHeaders: ["词根", "关键词"]
-    });
-
-    const keywordTotalSheet = await readSheetInSession({
-      cdp,
-      sessionId: targetPage.sessionId,
-      sheetUrl,
-      sheetName: keywordTotalSheetName,
-      expectedHeaders: ["词根", "关键词", "国家", "搜索量", "KD"]
-    });
-
-    return {
-      accountSheet,
-      keywordSheet,
-      keywordTotalSheet,
-      toolAccount,
-      browserAccount,
-      chromeProfile,
-      task: requireTask ? pickKeywordTask(keywordSheet.rows, taskRow) : null,
-      targetPage
-    };
-  } finally {
-	    if (bootstrapPage && bootstrapPage.sessionId !== targetPage?.sessionId) {
-	      if (closeBootstrapPage) {
-	        await cdp.send("Target.closeTarget", { targetId: bootstrapPage.targetId }).catch(() => {});
-	      } else {
-        await detachChromePage(cdp, bootstrapPage.sessionId);
-      }
-    }
-  }
+  return {
+    accountSheet,
+    keywordSheet,
+    keywordTotalSheet,
+    toolAccount,
+    browserAccount: toolAccount["运行浏览器账号"] || toolAccount["运行浏览器的账号"] || "",
+    task: requireTask ? pickKeywordTask(keywordSheet.rows, taskRow) : null
+  };
 }

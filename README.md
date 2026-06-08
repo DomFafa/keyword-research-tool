@@ -1,22 +1,19 @@
 # Keyword Research Tool
 
-这个仓库用于搭建关键词调研工具。当前先完成第一步基础设施：不接 Google Sheets API，直接复用本机 Chrome 的 Google 登录态读取输入表。
+这个仓库用于搭建关键词调研工具。Semrush 流程现在使用一个专用 Chrome profile 保存 3ue/Semrush 登录态，Google Sheet 读写直接走 Google Sheets API。
 
 ## 当前能力
 
 - 读取默认 Google Sheet：`keyword工具`
-- 读取 `工具账号密码` 子表里的 `运行浏览器账号`
-- 在本机 Chrome profiles 中匹配该账号；如果对应 profile 没有打开，会打开对应 profile
-- 用匹配到的 profile 读取 `词根拓展` 子表
+- 读取 `工具账号密码` 子表里的 `semrush账号`、`semrush密码`
+- 读取 `词根拓展` 子表里的关键词任务
 - 执行 Semrush 第一步词根拓展流程：
-  - 识别当前页面是在 3ue 登录页、3ue 首页、Semrush 首页、关键词概览页，还是关键词魔法工具页
-  - 通过 Semrush 前端内部 RPC 查询 `词根拓展` 的 `词根`、`匹配类型`、`搜索量范围`、`KD范围`
+  - 自动登录 3ue
+  - 打开 Semrush
+  - 通过 Semrush 前端内部 RPC 查询 `词根`、`匹配类型`、`搜索量范围`、`KD范围`
   - 采集 Keyword Magic RPC 返回的 `关键词`、`搜索量`、`KD`
   - 关键词模式通过 Keyword Overview RPC 返回本地/全球搜索量和 KD
-  - 输出本地 CSV/JSON，并写入 `关键词总表` 的 A-D 列
-- 输出结构化 JSON：`output/google-sheet-input.json`
-- 不需要 Google API key 或 OAuth 应用
-- Semrush 流程默认按邮箱 `vc.ddom@gmail.com` 匹配系统 Chrome profile，并通过 Chrome DevTools WebSocket 复用该 profile 的登录态
+  - 输出本地 CSV/JSON，并写入 `关键词总表`
 
 ## Semrush 调用方式
 
@@ -26,62 +23,40 @@
 - Keyword Overview：`POST /kwogw/v2/webapi`
   - `keywords.GetInfo` 获取搜索量和 KD
 
-脚本仍然需要先通过 Chrome 登录态进入 `sem.3ue.com`，RPC 请求在页面上下文内发出，以复用当前 3ue/Semrush 会话。
+RPC 请求在 `sem.3ue.com` 页面上下文内发出，以复用专用 Chrome profile 里的 3ue/Semrush 会话。
 
 ## 环境要求
 
 - Node.js 22+
-- Chrome 已登录能访问目标 Google Sheet 的账号
 - 本机已安装 Google Chrome
+- Google Sheet 已授权给 `GOOGLE_SERVICE_ACCOUNT_JSON` 对应的 service account
+- 先用专用 profile 登录一次 3ue/Semrush
 
-Semrush 默认按 Chrome profile 邮箱 `vc.ddom@gmail.com` 匹配当前机器上的实际 profile 目录，再启动调试模式 Chrome：
+默认专用 profile：
 
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --remote-debugging-port=0 \
-  --user-data-dir="$HOME/Library/Application Support/Google/Chrome" \
-  --profile-directory="<匹配到的 Profile 目录>"
+```text
+~/Library/Application Support/keyword-research-tool/semrush-chrome
 ```
 
-直接使用系统 Chrome profile 时，不复制 profile。运行前请关闭正在使用系统 Chrome profile 的普通 Chrome 窗口，否则 Chrome 可能复用现有进程并忽略 remote debugging 参数。
+这个 profile 不复制、不复用日常 Chrome profile，也不需要 DevTools 端口。
 
-以后日常先用这个入口启动 Chrome：
+可用环境变量：
 
-```bash
-npm run chrome:semrush
-```
+- `GOOGLE_SERVICE_ACCOUNT_JSON`：service account JSON 路径
+- `SEMRUSH_CHROME_PATH`：Chrome 可执行文件路径，默认 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`
+- `SEMRUSH_CHROME_USER_DATA_DIR`：Semrush 专用 Chrome profile 路径
+- `GOOGLE_SHEET_URL`：默认任务表 URL
 
-可用环境变量覆盖：
-
-- `CHROME_PATH`
-- `CHROME_REMOTE_DEBUGGING_PORT`
-- `CHROME_USER_DATA_DIR`
-- `CHROME_PROFILE` 或 `CHROME_PROFILE_MATCH`：可填 profile 目录名、profile 名或邮箱
-
-## 使用
+## 初始化登录
 
 ```bash
-npm run read:sheet
+npm install
+npm run semrush:login
 ```
 
-默认读取：
+打开 Chrome 后，手动登录 3ue/Semrush。登录完成后关闭窗口或按 `Ctrl-C`。
 
-- 账号配置子表：`工具账号密码`
-- 关键词输入子表：`词根拓展`
-
-换表格、gid 或子表名：
-
-```bash
-npm run read:sheet -- --sheet="https://docs.google.com/spreadsheets/d/.../edit?gid=0#gid=0" --gid=0 --account-sheet="工具账号密码" --keyword-sheet="词根拓展"
-```
-
-换输出文件：
-
-```bash
-npm run read:sheet -- --out=output/my-sheet.json
-```
-
-执行 Semrush 第一步：
+## 执行 Semrush 第一步
 
 ```bash
 npm run semrush:step1 -- --reset --max-pages=all
@@ -103,37 +78,22 @@ output/semrush-step1/root-generator.keywords.csv
 output/semrush-step1/root-generator.state.json
 ```
 
-## 输出结构
+## Google Sheet
 
-```json
-{
-  "source": {
-    "sheetUrl": "...",
-    "gid": "0",
-    "accountSheetName": "工具账号密码",
-    "keywordSheetName": "词根拓展",
-    "readAt": "..."
-  },
-  "toolAccount": {
-    "semrush账号": "imomo",
-    "运行浏览器账号": "vc.ddom@gmail.com"
-  },
-  "chromeProfile": {
-    "directory": "Default",
-    "email": "vc.ddom@gmail.com"
-  },
-  "sheets": {
-    "词根拓展": {
-      "rows": [
-        {
-          "词根": "generator",
-          "关键词": "",
-          "匹配类型": "完全匹配"
-        }
-      ]
-    }
-  }
-}
+默认读取：
+
+- 账号配置子表：`工具账号密码`
+- 关键词输入子表：`词根拓展`
+- 输出子表：`关键词总表`
+
+换表格：
+
+```bash
+npm run semrush:step1 -- --sheet="https://docs.google.com/spreadsheets/d/.../edit?gid=0#gid=0"
 ```
 
-Semrush 第一步会输出候选关键词，本地文件可直接用于后续筛选和写表。
+检查表格读取：
+
+```bash
+npm run read:sheet
+```

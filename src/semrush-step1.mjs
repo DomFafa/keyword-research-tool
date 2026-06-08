@@ -1,19 +1,8 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { readArg, readFlag } from "./lib/args.mjs";
-import {
-  attachChromePage,
-  CdpClient,
-  detachChromePage,
-  ensureChromeWebSocketEndpoint,
-  navigateAndWait,
-  waitForChromeTargetWithCdp
-} from "./lib/cdp.mjs";
-import { sleep } from "./lib/browser-actions.mjs";
 import { writeCsv, writeJson } from "./lib/files.mjs";
-import { getSpreadsheetId } from "./lib/google-sheet.mjs";
 import {
   batchUpdateSheet,
   formatRejectedKeywordCells,
@@ -46,10 +35,15 @@ import {
   fetchKeywordMagicSummary,
   fetchKeywordOverviewMetrics,
   loginDash,
-  openSemrushFromDash
+  openSemrushFromDash,
+  sleep
 } from "./lib/semrush-page.mjs";
-
-const DASH_LOGIN_URL = "https://dash.3ue.com/zh-Hans/#/login";
+import {
+  DASH_LOGIN_URL,
+  launchSemrushContext,
+  openSemrushLoginPage,
+  semrushUserDataDir
+} from "./lib/semrush-browser.mjs";
 
 async function readJsonIfExists(filePath, fallback) {
   try {
@@ -69,56 +63,54 @@ async function saveState(filePath, state) {
   });
 }
 
-async function findExistingWorkTarget(cdp) {
-  const { targetInfos = [] } = await cdp.send("Target.getTargets");
-  const pages = targetInfos.filter((target) => target.type === "page");
+function findExistingWorkPage(context) {
+  const pages = context.pages().filter((page) => !page.isClosed());
   return (
-    pages.find((target) => target.url.includes("sem.3ue.com/analytics/keywordmagic")) ||
-    pages.find((target) => target.url.includes("sem.3ue.com/analytics/keywordoverview")) ||
-    pages.find((target) => target.url.includes("sem.3ue.com")) ||
-    pages.find((target) => target.url.includes("dash.3ue.com"))
+    pages.find((page) => page.url().includes("sem.3ue.com/analytics/keywordmagic")) ||
+    pages.find((page) => page.url().includes("sem.3ue.com/analytics/keywordoverview")) ||
+    pages.find((page) => page.url().includes("sem.3ue.com")) ||
+    pages.find((page) => page.url().includes("dash.3ue.com"))
   );
 }
 
-async function openOrAttachWorkPage(cdp) {
-  const existing = await findExistingWorkTarget(cdp);
+async function openOrAttachWorkPage(context) {
+  const existing = findExistingWorkPage(context);
   if (existing) {
-    return attachChromePage(cdp, existing.targetId);
+    await existing.bringToFront().catch(() => {});
+    return existing;
   }
 
-  const { targetId } = await cdp.send("Target.createTarget", { url: DASH_LOGIN_URL });
-  const target = await waitForChromeTargetWithCdp(
-    cdp,
-    (item) => item.targetId === targetId || (item.type === "page" && item.url.startsWith(DASH_LOGIN_URL)),
-    30000
-  );
-  return attachChromePage(cdp, target.targetId);
+  return openSemrushLoginPage(context);
 }
 
-async function switchToLatestSemrushPage(cdp, currentPage) {
+async function switchToLatestSemrushPage(context, currentPage) {
   await sleep(3000);
-  const target = await waitForChromeTargetWithCdp(
-    cdp,
-    (item) => item.type === "page" && item.url.includes("sem.3ue.com"),
-    30000
-  );
-  if (target.targetId === currentPage.targetId) {
-    return currentPage;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 30000) {
+    const semrushPage = context
+      .pages()
+      .filter((page) => !page.isClosed())
+      .reverse()
+      .find((page) => page.url().includes("sem.3ue.com"));
+    if (semrushPage) {
+      await semrushPage.bringToFront().catch(() => {});
+      return semrushPage;
+    }
+    await sleep(500);
   }
-  await detachChromePage(cdp, currentPage.sessionId);
-  return attachChromePage(cdp, target.targetId);
+  return currentPage;
 }
 
-async function collectAllKeywordPagesViaRpc(cdp, sessionId, task, maxPages) {
+async function collectAllKeywordPagesViaRpc(page, task, maxPages) {
   const allRows = [];
   const seen = new Set();
-  const summary = await fetchKeywordMagicSummary(cdp, sessionId, task);
+  const summary = await fetchKeywordMagicSummary(page, task);
   const totalPages = summary.total ? Math.ceil(summary.total / 100) : Number.POSITIVE_INFINITY;
   const pageLimit = Math.min(maxPages, totalPages);
-  let page = 1;
+  let pageNumber = 1;
 
-  while (page <= pageLimit) {
-    const result = await fetchKeywordMagicPage(cdp, sessionId, task, page);
+  while (pageNumber <= pageLimit) {
+    const result = await fetchKeywordMagicPage(page, task, pageNumber);
     for (const row of result.rows) {
       const key = `${row.keyword}\t${row.volume}\t${row.kd}`;
       if (!seen.has(key)) {
@@ -127,125 +119,17 @@ async function collectAllKeywordPagesViaRpc(cdp, sessionId, task, maxPages) {
       }
     }
 
-    const pageLabel = Number.isFinite(totalPages) ? `${page}/${totalPages}` : String(page);
+    const pageLabel = Number.isFinite(totalPages) ? `${pageNumber}/${totalPages}` : String(pageNumber);
     console.log(`Collect RPC page ${pageLabel}: ${result.rows.length} row(s), ${allRows.length} total unique row(s).`);
 
     if (result.rows.length === 0 || result.rows.length < 100) {
       break;
     }
-    page += 1;
+    pageNumber += 1;
   }
 
   allRows.filteredKeywordCount = summary.total || allRows.length;
   return allRows;
-}
-
-async function copyToClipboard(text) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "inherit"] });
-    child.stdin.end(text);
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`pbcopy exited ${code}`));
-      }
-    });
-  });
-}
-
-async function runCommand(command, args) {
-  await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: "ignore" });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`${command} exited ${code}`));
-      }
-    });
-  });
-}
-
-async function runCommandOutput(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(`${command} exited ${code}: ${stderr.trim()}`));
-      }
-    });
-  });
-}
-
-async function systemPasteIntoChrome() {
-  await runCommand("osascript", [
-    "-e",
-    'tell application "Google Chrome" to activate',
-    "-e",
-    "delay 1",
-    "-e",
-    'tell application "System Events" to keystroke "v" using command down'
-  ]);
-}
-
-async function approveRemoteDebuggingPrompt() {
-  return runCommandOutput("osascript", [
-    "-e",
-    `tell application "System Events"
-      repeat with p in (every process whose background only is false)
-        try
-          repeat with w in windows of p
-            repeat with b in buttons of w
-              try
-                set buttonName to name of b as text
-                if buttonName contains "允许" or buttonName contains "Allow" then
-                  click b
-                  return "clicked:" & (name of p as text)
-                end if
-              end try
-            end repeat
-          end repeat
-        end try
-      end repeat
-      return "not-found"
-    end tell`
-  ]).catch((error) => `error:${error.message}`);
-}
-
-async function connectChromeCdpWithRecovery() {
-  const endpoint = await ensureChromeWebSocketEndpoint({ initialUrl: DASH_LOGIN_URL });
-  let lastError;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const cdp = new CdpClient(endpoint);
-    try {
-      await cdp.connect();
-      if (attempt > 1) {
-        console.log(`Connected to Chrome CDP after ${attempt} attempt(s).`);
-      }
-      return cdp;
-    } catch (error) {
-      lastError = error;
-      cdp.close();
-      const approval = await approveRemoteDebuggingPrompt();
-      console.warn(`Chrome CDP connect attempt ${attempt}/5 failed: ${error.message}; prompt=${approval}`);
-      await sleep(1500);
-    }
-  }
-  throw lastError;
 }
 
 function columnName(index) {
@@ -267,61 +151,11 @@ function headerIndex(headers, header) {
   return index;
 }
 
-async function pasteTsvToSheetRange(cdp, sheetPage, sheetUrl, gid, range, tsv) {
-  const spreadsheetId = getSpreadsheetId(sheetUrl);
-  const targetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit?gid=${gid}&range=${encodeURIComponent(range)}#gid=${gid}`;
-  await copyToClipboard(tsv);
-  await cdp.send("Target.activateTarget", { targetId: sheetPage.targetId }).catch(() => {});
-  await cdp.send("Page.navigate", { url: targetUrl }, sheetPage.sessionId).catch(() => {});
-  await sleep(4000);
-  await cdp.send("Target.activateTarget", { targetId: sheetPage.targetId }).catch(() => {});
-  await systemPasteIntoChrome();
-  await sleep(8000);
-}
-
-async function resolveSheetGid(cdp, sessionId, sheetName) {
-  const clicked = await cdp.send(
-    "Runtime.evaluate",
-    {
-      awaitPromise: true,
-      returnByValue: true,
-      expression: `(() => {
-        const tabs = [...document.querySelectorAll(".docs-sheet-tab")];
-        const tab = tabs.find((item) => (item.innerText || item.textContent || "").trim() === ${JSON.stringify(sheetName)});
-        if (!tab) return { ok: false, reason: "sheet tab not found" };
-        tab.scrollIntoView({ block: "center", inline: "center" });
-        tab.click();
-        return { ok: true };
-      })()`
-    },
-    sessionId
-  );
-  if (clicked.result?.value?.ok === false) {
-    throw new Error(clicked.result.value.reason);
-  }
-  await sleep(1500);
-  const urlResult = await cdp.send(
-    "Runtime.evaluate",
-    {
-      returnByValue: true,
-      expression: "location.href"
-    },
-    sessionId
-  );
-  const url = urlResult.result?.value || "";
-  const gid = new URL(url).searchParams.get("gid") || url.match(/[#&?]gid=(\\d+)/)?.[1];
-  if (!gid) {
-    throw new Error(`Unable to resolve gid for ${sheetName}`);
-  }
-  return gid;
-}
-
-async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName, rows, gidOverride) {
+async function pasteRowsToKeywordTotalSheet(sheetUrl, sheetName, rows, gid) {
   if (rows.length === 0) {
     return { skipped: true };
   }
 
-  const gid = gidOverride || await resolveSheetGid(cdp, sheetPage.sessionId, sheetName);
   const existing = await getSheetValues({
     sheetUrl,
     range: `${sheetName}!A:F`
@@ -408,7 +242,7 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
   };
 }
 
-async function writeKeywordTaskUpdates(cdp, sheetPage, sheetUrl, sheet, taskRow, updates) {
+async function writeKeywordTaskUpdates(sheetUrl, sheet, taskRow, updates) {
   const sheetName = "词根拓展";
   const headers = sheet.headers || [];
 
@@ -453,8 +287,8 @@ async function writeKeywordTaskUpdates(cdp, sheetPage, sheetUrl, sheet, taskRow,
   );
 }
 
-async function updateKeywordTaskResultSheet(cdp, sheetPage, sheetUrl, sheet, taskRow, result) {
-  return writeKeywordTaskUpdates(cdp, sheetPage, sheetUrl, sheet, taskRow, [
+async function updateKeywordTaskResultSheet(sheetUrl, sheet, taskRow, result) {
+  return writeKeywordTaskUpdates(sheetUrl, sheet, taskRow, [
     {
       header: "筛选数量",
       value: String(result.filteredKeywordCount || result.collectedRows)
@@ -466,8 +300,8 @@ async function updateKeywordTaskResultSheet(cdp, sheetPage, sheetUrl, sheet, tas
   ]);
 }
 
-async function updateKeywordTaskKeywordResultSheet(cdp, sheetPage, sheetUrl, sheet, taskRow) {
-  return writeKeywordTaskUpdates(cdp, sheetPage, sheetUrl, sheet, taskRow, [
+async function updateKeywordTaskKeywordResultSheet(sheetUrl, sheet, taskRow) {
+  return writeKeywordTaskUpdates(sheetUrl, sheet, taskRow, [
     {
       header: "SEM完成状态",
       value: "已完成关键词采集"
@@ -475,8 +309,8 @@ async function updateKeywordTaskKeywordResultSheet(cdp, sheetPage, sheetUrl, she
   ]);
 }
 
-async function updateKeywordTaskStatusSheet(cdp, sheetPage, sheetUrl, sheet, taskRow, status) {
-  return writeKeywordTaskUpdates(cdp, sheetPage, sheetUrl, sheet, taskRow, [
+async function updateKeywordTaskStatusSheet(sheetUrl, sheet, taskRow, status) {
+  return writeKeywordTaskUpdates(sheetUrl, sheet, taskRow, [
     {
       header: "SEM完成状态",
       value: status
@@ -484,7 +318,7 @@ async function updateKeywordTaskStatusSheet(cdp, sheetPage, sheetUrl, sheet, tas
   ]);
 }
 
-async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
+async function runSemrushFlow(context, page, config, state, statePath, maxPages) {
   const { task, toolAccount } = config;
   const semrushUsername = toolAccount["semrush账号"] || "";
   const semrushPassword = toolAccount["semrush密码"] || toolAccount["密码"] || "";
@@ -494,34 +328,30 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
   }
 
   for (let step = 0; step < 12; step += 1) {
-    await closeSemrushCoachmark(cdp, page.sessionId);
-    const current = await detectPage(cdp, page.sessionId);
+    await closeSemrushCoachmark(page);
+    const current = await detectPage(page);
     state.lastDetectedPage = current;
     await saveState(statePath, state);
     console.log(`Page: ${current.kind} ${current.url}`);
 
     if (current.kind === "dash_login") {
-      await loginDash(cdp, page.sessionId, semrushUsername, semrushPassword);
+      await loginDash(page, semrushUsername, semrushPassword);
       state.dashLoggedIn = true;
       await saveState(statePath, state);
       continue;
     }
 
     if (current.kind === "dash_home") {
-      await openSemrushFromDash(cdp, page.sessionId).catch((error) => {
-        if (!/Inspected target navigated or closed|No target with given id|Session closed/i.test(error.message || "")) {
-          throw error;
-        }
-      });
+      await openSemrushFromDash(page);
       state.openedSemrushFromDash = true;
       await saveState(statePath, state);
-      page = await switchToLatestSemrushPage(cdp, page);
+      page = await switchToLatestSemrushPage(context, page);
       continue;
     }
 
     if (current.kind.startsWith("semrush_")) {
       if (task.mode === "keyword") {
-        const metrics = await fetchKeywordOverviewMetrics(cdp, page.sessionId, task.query, task.matchCountry);
+        const metrics = await fetchKeywordOverviewMetrics(page, task.query, task.matchCountry);
         const hasCountry = Boolean(task.matchCountry);
         const rows = [{
           root: "",
@@ -539,7 +369,7 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
         return { page, rows, filteredKeywordCount: rows.length };
       }
 
-      const rows = await collectAllKeywordPagesViaRpc(cdp, page.sessionId, task, maxPages);
+      const rows = await collectAllKeywordPagesViaRpc(page, task, maxPages);
       state.collectedRows = rows.length;
       state.filteredKeywordCount = rows.filteredKeywordCount || rows.length;
       state.completed = true;
@@ -547,7 +377,7 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
       return { page, rows, filteredKeywordCount: state.filteredKeywordCount };
     }
 
-    await navigateAndWait(cdp, page.sessionId, DASH_LOGIN_URL, 45000).catch(async () => {
+    await page.goto(DASH_LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(async () => {
       await sleep(3000);
     });
   }
@@ -556,7 +386,7 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
 }
 
 async function runOneTask({
-  cdp,
+  context,
   page,
   baseConfig,
   sheetUrl,
@@ -581,7 +411,7 @@ async function runOneTask({
     : await readJsonIfExists(statePath, {});
 
   console.log(`Loaded task row ${taskRow}: ${task.query}`);
-  const result = await runSemrushFlow(cdp, page, config, state, statePath, maxPages);
+  const result = await runSemrushFlow(context, page, config, state, statePath, maxPages);
   const outputCountry = task.mode === "keyword"
     ? ""
     : task.matchCountry;
@@ -627,8 +457,6 @@ async function runOneTask({
   let taskWriteResult = { skipped: true };
   if (!skipSheetWrite) {
     sheetWriteResult = await pasteRowsToKeywordTotalSheet(
-      cdp,
-      baseConfig.targetPage,
       sheetUrl,
       "关键词总表",
       outputRows,
@@ -637,15 +465,11 @@ async function runOneTask({
     await writeJson(path.join(outDir, `${runKey}.sheet-write.json`), sheetWriteResult);
     taskWriteResult = task.mode === "keyword"
       ? await updateKeywordTaskKeywordResultSheet(
-          cdp,
-          baseConfig.targetPage,
           sheetUrl,
           baseConfig.keywordSheet,
           taskRow
         )
       : await updateKeywordTaskResultSheet(
-          cdp,
-          baseConfig.targetPage,
           sheetUrl,
           baseConfig.keywordSheet,
           taskRow,
@@ -701,19 +525,19 @@ async function main() {
   const force = readFlag("force");
   const stopOnError = readFlag("stop-on-error");
 
-	  const cdp = await connectChromeCdpWithRecovery();
-
   let page;
   let config;
-	  try {
+  const context = await launchSemrushContext();
+  try {
+    console.log(`Semrush Chrome profile: ${semrushUserDataDir()}`);
     console.log("Reading Google Sheet config...");
-	    config = await readToolConfig(cdp, {
+    config = await readToolConfig({
       sheetUrl,
       taskRow: taskRows[0],
       requireTask: !isBatch
     });
     console.log("Attaching Semrush work page...");
-	    page = await openOrAttachWorkPage(cdp);
+    page = await openOrAttachWorkPage(context);
 
     const summaries = [];
     for (const taskRow of taskRows) {
@@ -731,7 +555,7 @@ async function main() {
 
       try {
         const result = await runOneTask({
-          cdp,
+          context,
           page,
           baseConfig: config,
           sheetUrl,
@@ -750,8 +574,6 @@ async function main() {
         summaries.push({ row: taskRow, failed: true, error: shortErrorMessage(error) });
         if (!skipSheetWrite) {
           await updateKeywordTaskStatusSheet(
-            cdp,
-            config.targetPage,
             sheetUrl,
             config.keywordSheet,
             taskRow,
@@ -774,13 +596,7 @@ async function main() {
     });
     console.log(`Run summary: ${summaries.length} row(s) handled.`);
   } finally {
-    if (page) {
-      await detachChromePage(cdp, page.sessionId);
-    }
-    if (config?.targetPage) {
-      await detachChromePage(cdp, config.targetPage.sessionId);
-    }
-    cdp.close();
+    await context.close().catch(() => {});
   }
 }
 

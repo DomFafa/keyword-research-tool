@@ -1,6 +1,3 @@
-import { evaluate, navigateAndWait } from "./cdp.mjs";
-import { clickByText, setInputValue, sleep, waitForCondition } from "./browser-actions.mjs";
-
 const COUNTRY_DATABASE_CODES = {
   美国: "us",
   "United States": "us",
@@ -60,6 +57,58 @@ const KEYWORD_MAGIC_MODES = {
 
 const KEYWORD_MAGIC_PAGE_SIZE = 100;
 
+export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function evaluate(page, expression) {
+  return page.evaluate(expression);
+}
+
+async function waitForCondition(page, expression, timeoutMs = 30000) {
+  const startedAt = Date.now();
+  let lastValue;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastValue = await evaluate(page, expression).catch((error) => ({
+      __error: error.message
+    }));
+    if (lastValue === true || (lastValue && lastValue.ok)) {
+      return lastValue;
+    }
+    await sleep(500);
+  }
+
+  throw new Error(`Timed out waiting for condition: ${expression}. Last value: ${JSON.stringify(lastValue)}`);
+}
+
+async function clickByText(page, { selector = "button, a", text, includes = false }) {
+  const result = await evaluate(
+    page,
+    `(() => {
+      const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+      const expected = ${JSON.stringify(text)};
+      const items = [...document.querySelectorAll(${JSON.stringify(selector)})];
+      const el = items.find((item) => {
+        const actual = clean(item.innerText || item.textContent);
+        return ${JSON.stringify(includes)} ? actual.includes(expected) : actual === expected;
+      });
+      if (!el) return { ok: false, reason: "text not found", text: expected };
+      el.scrollIntoView({ block: "center", inline: "center" });
+      el.click();
+      return { ok: true, text: clean(el.innerText || el.textContent) };
+    })()`
+  );
+  if (!result.ok) {
+    throw new Error(result.reason || `Unable to click text ${text}`);
+  }
+  return result;
+}
+
+async function gotoPage(page, url, timeoutMs = 45000) {
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs }).catch(async () => {
+    await sleep(4000);
+  });
+}
+
 export function countryDatabaseCode(country) {
   const value = String(country || "").trim();
   if (!value) {
@@ -76,10 +125,9 @@ export function keywordMagicMode(matchType = "") {
   return KEYWORD_MAGIC_MODES[key];
 }
 
-export async function detectPage(cdp, sessionId) {
+export async function detectPage(page) {
   return evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const url = location.href;
       const has = (selector) => Boolean(document.querySelector(selector));
@@ -111,37 +159,30 @@ export async function detectPage(cdp, sessionId) {
   );
 }
 
-export async function loginDash(cdp, sessionId, username, password) {
-  await waitForCondition(cdp, sessionId, "Boolean(document.querySelector('#input-username') && document.querySelector('#input-password'))", 30000);
-  await setInputValue(cdp, sessionId, "#input-username", username);
-  await setInputValue(cdp, sessionId, "#input-password", password);
-  await clickByText(cdp, sessionId, { selector: "button", text: "登录" });
+export async function loginDash(page, username, password) {
+  await waitForCondition(page, "Boolean(document.querySelector('#input-username') && document.querySelector('#input-password'))", 30000);
+  await page.locator("#input-username").fill(username);
+  await page.locator("#input-password").fill(password);
+  await clickByText(page, { selector: "button", text: "登录" });
   await sleep(3000);
 }
 
-export async function openSemrushFromDash(cdp, sessionId) {
+export async function openSemrushFromDash(page) {
   await waitForCondition(
-    cdp,
-    sessionId,
+    page,
     `Boolean([...document.querySelectorAll("button")].find((button) => /打开/.test(button.innerText || button.textContent || "")))`,
     30000
   );
-  await selectHealthySemrushNode(cdp, sessionId);
-  await clickByText(cdp, sessionId, { selector: "button", text: "打开", includes: true });
+  await selectHealthySemrushNode(page);
+  await clickByText(page, { selector: "button", text: "打开", includes: true });
   await sleep(5000);
 }
 
-async function selectHealthySemrushNode(cdp, sessionId) {
+async function selectHealthySemrushNode(page) {
   const result = await evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
-      const isVisible = (el) => {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-      };
       const current = [...document.querySelectorAll("button.select-button")]
         .find((button) => /节点/.test(clean(button.innerText || button.textContent)));
       const overlayOpen = Boolean(document.querySelector(".cdk-overlay-pane"));
@@ -158,8 +199,7 @@ async function selectHealthySemrushNode(cdp, sessionId) {
   }
 
   await waitForCondition(
-    cdp,
-    sessionId,
+    page,
     `Boolean([...document.querySelectorAll(".cdk-overlay-pane .text-size-normal, .cdk-overlay-pane div")]
       .find((item) => {
         const text = String(item.innerText || item.textContent || "").replace(/\\s+/g, " ").trim();
@@ -169,8 +209,7 @@ async function selectHealthySemrushNode(cdp, sessionId) {
   );
 
   const selected = await evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
       const isVisible = (el) => {
@@ -196,10 +235,9 @@ async function selectHealthySemrushNode(cdp, sessionId) {
   return selected;
 }
 
-export async function closeSemrushCoachmark(cdp, sessionId) {
+export async function closeSemrushCoachmark(page) {
   return evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
       const buttons = [...document.querySelectorAll("button")];
@@ -311,10 +349,9 @@ function rpcUrlExpression(path) {
   })()`;
 }
 
-async function callSemrushRpc(cdp, sessionId, path, method, params) {
+async function callSemrushRpc(page, path, method, params) {
   return evaluate(
-    cdp,
-    sessionId,
+    page,
     `(async () => {
       const endpoint = ${rpcUrlExpression(path)};
       const response = await fetch(endpoint, {
@@ -335,16 +372,14 @@ async function callSemrushRpc(cdp, sessionId, path, method, params) {
         result: json.result,
         endpoint
       };
-    })()`,
-    90000
+    })()`
   );
 }
 
-async function navigateWithinSemrush(cdp, sessionId, pathname, query, country = "") {
+async function navigateWithinSemrush(page, pathname, query, country = "") {
   const databaseCode = countryDatabaseCode(country) || "us";
   const targetUrl = await evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const current = new URL(location.href);
       const next = new URL(${JSON.stringify(pathname)}, current.origin);
@@ -355,16 +390,13 @@ async function navigateWithinSemrush(cdp, sessionId, pathname, query, country = 
       return next.toString();
     })()`
   );
-  await navigateAndWait(cdp, sessionId, targetUrl, 45000).catch(async () => {
-    await sleep(4000);
-  });
+  await gotoPage(page, targetUrl, 45000);
 }
 
-async function ensureKeywordMagicPage(cdp, sessionId, task) {
+async function ensureKeywordMagicPage(page, task) {
   const databaseCode = countryDatabaseCode(task.matchCountry) || "us";
   const isReady = await evaluate(
-    cdp,
-    sessionId,
+    page,
     `(() => {
       const url = new URL(location.href);
       return url.hostname.includes("sem.3ue.com") &&
@@ -375,13 +407,13 @@ async function ensureKeywordMagicPage(cdp, sessionId, task) {
   );
 
   if (!isReady) {
-    await navigateWithinSemrush(cdp, sessionId, "/analytics/keywordmagic/", task.query, databaseCode);
+    await navigateWithinSemrush(page, "/analytics/keywordmagic/", task.query, databaseCode);
   }
-  await waitForCondition(cdp, sessionId, "location.href.includes('/analytics/keywordmagic')", 45000);
+  await waitForCondition(page, "location.href.includes('/analytics/keywordmagic')", 45000);
 }
 
-export async function fetchKeywordMagicPage(cdp, sessionId, task, page = 1) {
-  await ensureKeywordMagicPage(cdp, sessionId, task);
+export async function fetchKeywordMagicPage(page, task, pageNumber = 1) {
+  await ensureKeywordMagicPage(page, task);
   const params = buildKeywordMagicRpcParams({
     query: task.query,
     country: task.matchCountry,
@@ -390,9 +422,9 @@ export async function fetchKeywordMagicPage(cdp, sessionId, task, page = 1) {
     volumeMax: task.volumeMax,
     kdMin: task.kdMin,
     kdMax: task.kdMax,
-    page
+    page: pageNumber
   });
-  const response = await callSemrushRpc(cdp, sessionId, "/kmtgw/v2/webapi", "ideas.GetKeywords", params);
+  const response = await callSemrushRpc(page, "/kmtgw/v2/webapi", "ideas.GetKeywords", params);
   if (!response.ok) {
     throw new Error(`Semrush Keyword Magic RPC failed: ${response.error?.message || response.status}`);
   }
@@ -400,15 +432,15 @@ export async function fetchKeywordMagicPage(cdp, sessionId, task, page = 1) {
     rows: parseKeywordMagicRows({
       root: task.rootKeyword,
       sourceQuery: task.query,
-      page,
+      page: pageNumber,
       response
     }),
     endpoint: response.endpoint
   };
 }
 
-export async function fetchKeywordMagicSummary(cdp, sessionId, task) {
-  await ensureKeywordMagicPage(cdp, sessionId, task);
+export async function fetchKeywordMagicSummary(page, task) {
+  await ensureKeywordMagicPage(page, task);
   const params = buildKeywordMagicRpcParams({
     query: task.query,
     country: task.matchCountry,
@@ -420,7 +452,7 @@ export async function fetchKeywordMagicSummary(cdp, sessionId, task) {
     page: 1
   });
   delete params.page;
-  const response = await callSemrushRpc(cdp, sessionId, "/kmtgw/v2/webapi", "ideas.GetKeywordsSummary", params);
+  const response = await callSemrushRpc(page, "/kmtgw/v2/webapi", "ideas.GetKeywordsSummary", params);
   if (!response.ok) {
     throw new Error(`Semrush Keyword Magic summary RPC failed: ${response.error?.message || response.status}`);
   }
@@ -430,11 +462,11 @@ export async function fetchKeywordMagicSummary(cdp, sessionId, task) {
   };
 }
 
-export async function fetchKeywordOverviewMetrics(cdp, sessionId, query, country = "") {
+export async function fetchKeywordOverviewMetrics(page, query, country = "") {
   const databaseCode = countryDatabaseCode(country) || "us";
-  await navigateWithinSemrush(cdp, sessionId, "/analytics/keywordoverview/", query, databaseCode);
-  await waitForCondition(cdp, sessionId, "location.href.includes('/analytics/keywordoverview')", 45000);
-  const response = await callSemrushRpc(cdp, sessionId, "/kwogw/v2/webapi", "keywords.GetInfo", {
+  await navigateWithinSemrush(page, "/analytics/keywordoverview/", query, databaseCode);
+  await waitForCondition(page, "location.href.includes('/analytics/keywordoverview')", 45000);
+  const response = await callSemrushRpc(page, "/kwogw/v2/webapi", "keywords.GetInfo", {
     device: 0,
     database: databaseCode,
     currency: "USD",
@@ -459,6 +491,6 @@ export async function fetchKeywordOverviewMetrics(cdp, sessionId, query, country
     localVolume: formatInteger(local.volume),
     globalVolume: formatInteger(globalVolume || local.volume),
     kd: local.difficulty === null || local.difficulty === undefined ? "" : String(local.difficulty),
-    url: await evaluate(cdp, sessionId, "location.href")
+    url: await evaluate(page, "location.href")
   };
 }

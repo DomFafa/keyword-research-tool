@@ -1,11 +1,8 @@
 import fs from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
-const DEFAULT_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const DEFAULT_CHROME_USER_DATA_DIR = path.join(os.homedir(), "Library/Application Support/Google/Chrome");
-const DEFAULT_CHROME_PROFILE = "vc.ddom@gmail.com";
 const DEFAULT_ACTIVE_PORT_FILES = [
   "Library/Application Support/Google/Chrome/DevToolsActivePort",
   "Library/Application Support/Google/Chrome Canary/DevToolsActivePort",
@@ -14,138 +11,6 @@ const DEFAULT_ACTIVE_PORT_FILES = [
 ];
 
 const FALLBACK_DEBUGGING_PORTS = ["9222", "9333"];
-const CHROME_LOCK_FILE_NAMES = [
-  "SingletonLock",
-  "SingletonSocket",
-  "SingletonCookie"
-];
-
-function defaultChromeDebugPort() {
-  return process.env.CHROME_REMOTE_DEBUGGING_PORT
-    ? Number(process.env.CHROME_REMOTE_DEBUGGING_PORT)
-    : 0;
-}
-
-function defaultChromeUserDataDir() {
-  return process.env.CHROME_USER_DATA_DIR || DEFAULT_CHROME_USER_DATA_DIR;
-}
-
-function defaultChromeProfile() {
-  return process.env.CHROME_PROFILE || process.env.CHROME_PROFILE_MATCH || DEFAULT_CHROME_PROFILE;
-}
-
-function isChromeUserDataDirLocked(userDataDir) {
-  return CHROME_LOCK_FILE_NAMES.some((name) => fs.existsSync(path.join(userDataDir, name)));
-}
-
-function normalizeProfileValue(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function isChromeProfileDirectory(value) {
-  return value === "Default" || /^Profile \d+$/.test(value);
-}
-
-function readJsonFile(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function listChromeProfilesFromUserDataDir(userDataDir) {
-  if (!fs.existsSync(userDataDir)) {
-    return [];
-  }
-
-  return fs
-    .readdirSync(userDataDir)
-    .filter((directory) => isChromeProfileDirectory(directory))
-    .flatMap((directory) => {
-      const preferences = readJsonFile(path.join(userDataDir, directory, "Preferences"));
-      if (!preferences) {
-        return [];
-      }
-      const accounts = preferences.account_info || [];
-      return [{
-        directory,
-        name: preferences.profile?.name || "",
-        email: accounts[0]?.email || "",
-        fullName: accounts[0]?.full_name || "",
-        accounts
-      }];
-    });
-}
-
-export function resolveChromeProfileDirectory(profile = defaultChromeProfile(), userDataDir = defaultChromeUserDataDir()) {
-  const selectors = String(profile || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (!selectors.length) {
-    return "";
-  }
-
-  const profiles = listChromeProfilesFromUserDataDir(userDataDir);
-  for (const selector of selectors) {
-    if (isChromeProfileDirectory(selector) && fs.existsSync(path.join(userDataDir, selector))) {
-      return selector;
-    }
-
-    const expected = normalizeProfileValue(selector);
-    const match = profiles.find((item) => {
-      const values = [
-        item.directory,
-        item.name,
-        item.email,
-        item.fullName,
-        ...item.accounts.flatMap((account) => [account.email, account.full_name])
-      ];
-      return values.some((value) => normalizeProfileValue(value) === expected);
-    });
-    if (match) {
-      return match.directory;
-    }
-  }
-
-  if (!profiles.length && selectors.length === 1 && isChromeProfileDirectory(selectors[0])) {
-    return selectors[0];
-  }
-
-  const available = profiles
-    .map((item) => `${item.name || item.email || item.directory} (${item.directory}${item.email ? `, ${item.email}` : ""})`)
-    .join(", ") || "none";
-  throw new Error(`Cannot find Chrome profile "${selectors.join(", ")}". Available profiles: ${available}`);
-}
-
-export function buildChromeLaunchArgs({
-  chromePath = process.env.CHROME_PATH || DEFAULT_CHROME_PATH,
-  port = defaultChromeDebugPort(),
-  userDataDir = defaultChromeUserDataDir(),
-  profile = defaultChromeProfile(),
-  initialUrl = ""
-} = {}) {
-  const profileDirectory = resolveChromeProfileDirectory(profile, userDataDir);
-  const args = [
-    chromePath,
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-save-password-bubble",
-    "--disable-password-generation",
-    "--password-store=basic",
-    "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,PasswordCheck,AutofillServerCommunication"
-  ];
-  if (profileDirectory) {
-    args.push(`--profile-directory=${profileDirectory}`);
-  }
-  if (initialUrl) {
-    args.push(initialUrl);
-  }
-  return args;
-}
 
 export function readDebuggerEndpointFromPort(port) {
   for (const host of [`127.0.0.1:${port}`, `[::1]:${port}`, `localhost:${port}`]) {
@@ -165,45 +30,6 @@ export function readDebuggerEndpointFromPort(port) {
     }
   }
   return "";
-}
-
-function readDebuggerEndpointFromActivePortFile(userDataDir) {
-  const file = path.join(userDataDir, "DevToolsActivePort");
-  if (!fs.existsSync(file)) {
-    return "";
-  }
-
-  const [port, browserPath] = fs.readFileSync(file, "utf8").trim().split(/\r?\n/);
-  if (!port) {
-    return "";
-  }
-
-  const endpoint = readDebuggerEndpointFromPort(port);
-  if (endpoint) {
-    return endpoint;
-  }
-
-  return browserPath?.startsWith("/devtools/browser/") && isPortListening(port)
-    ? `ws://127.0.0.1:${port}${browserPath}`
-    : "";
-}
-
-function isPortListening(port) {
-  try {
-    const output = execFileSync("lsof", [
-      "-nP",
-      `-iTCP:${port}`,
-      "-sTCP:LISTEN",
-      "-t"
-    ], {
-      encoding: "utf8",
-      timeout: 2000,
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    return Boolean(output.trim());
-  } catch {
-    return false;
-  }
 }
 
 export function readChromeWebSocketEndpoint() {
@@ -247,49 +73,6 @@ export function readChromeWebSocketEndpoint() {
   );
 }
 
-export async function ensureChromeWebSocketEndpoint({
-  chromePath = process.env.CHROME_PATH || DEFAULT_CHROME_PATH,
-  port = defaultChromeDebugPort(),
-  userDataDir = defaultChromeUserDataDir(),
-  profile = defaultChromeProfile(),
-  initialUrl = "",
-  timeoutMs = 90000
-} = {}) {
-  const profileDirectory = resolveChromeProfileDirectory(profile, userDataDir);
-  const existingEndpoint = port
-    ? readDebuggerEndpointFromPort(port)
-    : readDebuggerEndpointFromActivePortFile(userDataDir);
-  if (existingEndpoint) {
-    return existingEndpoint;
-  }
-  if (userDataDir === DEFAULT_CHROME_USER_DATA_DIR && isChromeUserDataDirLocked(userDataDir)) {
-    throw new Error(
-      `Chrome profile is already in use without an available CDP endpoint: ${userDataDir}. Close Chrome, then run npm run chrome:semrush. profile='${profileDirectory}' selector='${profile}'.`
-    );
-  }
-
-  fs.mkdirSync(userDataDir, { recursive: true });
-  const args = buildChromeLaunchArgs({ chromePath, port, userDataDir, profile: profileDirectory, initialUrl });
-  const child = spawn(args[0], args.slice(1), {
-    detached: true,
-    stdio: "ignore"
-  });
-  child.unref();
-
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const endpoint = port
-      ? readDebuggerEndpointFromPort(port)
-      : readDebuggerEndpointFromActivePortFile(userDataDir);
-    if (endpoint) {
-      return endpoint;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  throw new Error(`Timed out waiting for Chrome remote debugging port ${port || "auto"}.`);
-}
-
 export class CdpClient {
   constructor(webSocketUrl) {
     this.webSocketUrl = webSocketUrl;
@@ -298,17 +81,17 @@ export class CdpClient {
     this.eventHandlers = new Map();
   }
 
-	  async connect() {
-	    this.ws = new WebSocket(this.webSocketUrl);
-	    this.ws.addEventListener("message", (event) => {
-	      const message = JSON.parse(event.data);
-	      if (message.id && this.pending.has(message.id)) {
-	        const { resolve, reject, timer } = this.pending.get(message.id);
-	        this.pending.delete(message.id);
-	        clearTimeout(timer);
-	        if (message.error) {
-	          reject(new Error(message.error.message));
-	        } else {
+  async connect() {
+    this.ws = new WebSocket(this.webSocketUrl);
+    this.ws.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (message.id && this.pending.has(message.id)) {
+        const { resolve, reject, timer } = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        clearTimeout(timer);
+        if (message.error) {
+          reject(new Error(message.error.message));
+        } else {
           resolve(message.result ?? {});
         }
         return;
@@ -323,39 +106,39 @@ export class CdpClient {
       }
     });
 
-	    await new Promise((resolve, reject) => {
-	      const timer = setTimeout(() => {
-	        reject(new Error("Timed out connecting to Chrome CDP WebSocket"));
-	      }, 15000);
-	      this.ws.addEventListener("open", () => {
-	        clearTimeout(timer);
-	        resolve();
-	      }, { once: true });
-	      this.ws.addEventListener("error", (error) => {
-	        clearTimeout(timer);
-	        reject(error);
-	      }, { once: true });
-	    });
-	  }
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Timed out connecting to Chrome CDP WebSocket"));
+      }, 15000);
+      this.ws.addEventListener("open", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+      this.ws.addEventListener("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }, { once: true });
+    });
+  }
 
-	  send(method, params = {}, sessionId) {
-	    const id = this.nextId;
-	    this.nextId += 1;
+  send(method, params = {}, sessionId) {
+    const id = this.nextId;
+    this.nextId += 1;
 
     const payload = { id, method, params };
     if (sessionId) {
       payload.sessionId = sessionId;
     }
 
-	    this.ws.send(JSON.stringify(payload));
-	    return new Promise((resolve, reject) => {
-	      const timer = setTimeout(() => {
-	        this.pending.delete(id);
-	        reject(new Error(`Timed out waiting for CDP response: ${method}`));
-	      }, params?.timeout || 60000);
-	      this.pending.set(id, { resolve, reject, timer });
-	    });
-	  }
+    this.ws.send(JSON.stringify(payload));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timed out waiting for CDP response: ${method}`));
+      }, params?.timeout || 60000);
+      this.pending.set(id, { resolve, reject, timer });
+    });
+  }
 
   on(method, handler) {
     if (!this.eventHandlers.has(method)) {
