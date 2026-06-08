@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRejectedKeywordCellFormatRequests } from "../src/lib/google-sheets-api.mjs";
 
-test("buildRejectedKeywordCellFormatRequests targets keyword cells for rejected rows", () => {
+test("buildRejectedKeywordCellFormatRequests syncs keyword cell backgrounds by judgement", () => {
   const requests = buildRejectedKeywordCellFormatRequests({
     sheetId: "999267438",
     startRow: 10,
@@ -14,12 +14,26 @@ test("buildRejectedKeywordCellFormatRequests targets keyword cells for rejected 
     ]
   });
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
   assert.deepEqual(requests.map((request) => request.repeatCell.range), [
+    {
+      sheetId: 999267438,
+      startRowIndex: 9,
+      endRowIndex: 10,
+      startColumnIndex: 1,
+      endColumnIndex: 2
+    },
     {
       sheetId: 999267438,
       startRowIndex: 10,
       endRowIndex: 11,
+      startColumnIndex: 1,
+      endColumnIndex: 2
+    },
+    {
+      sheetId: 999267438,
+      startRowIndex: 11,
+      endRowIndex: 12,
       startColumnIndex: 1,
       endColumnIndex: 2
     },
@@ -32,6 +46,11 @@ test("buildRejectedKeywordCellFormatRequests targets keyword cells for rejected 
     }
   ]);
   assert.deepEqual(requests[0].repeatCell.cell.userEnteredFormat.backgroundColor, {
+    red: 1,
+    green: 1,
+    blue: 1
+  });
+  assert.deepEqual(requests[1].repeatCell.cell.userEnteredFormat.backgroundColor, {
     red: 1,
     green: 0,
     blue: 0

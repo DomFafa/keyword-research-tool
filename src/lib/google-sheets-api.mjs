@@ -260,9 +260,6 @@ export async function batchUpdateSheet({ sheetUrl, requests, keyPath = "" }) {
 export function buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows }) {
   const requests = [];
   rows.forEach((row, index) => {
-    if (row?.判断 !== "拒绝") {
-      return;
-    }
     const rowIndex = startRow + index - 1;
     requests.push({
       repeatCell: {
@@ -275,7 +272,9 @@ export function buildRejectedKeywordCellFormatRequests({ sheetId, startRow, rows
         },
         cell: {
           userEnteredFormat: {
-            backgroundColor: { red: 1, green: 0, blue: 0 }
+            backgroundColor: row?.判断 === "拒绝"
+              ? { red: 1, green: 0, blue: 0 }
+              : { red: 1, green: 1, blue: 1 }
           }
         },
         fields: "userEnteredFormat.backgroundColor"
