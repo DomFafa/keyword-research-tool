@@ -16,7 +16,7 @@
   - 输出本地 CSV/JSON，并写入 `关键词总表` 的 A-D 列
 - 输出结构化 JSON：`output/google-sheet-input.json`
 - 不需要 Google API key 或 OAuth 应用
-- 通过 Chrome DevTools WebSocket 复用本机 Chrome 登录态
+- Semrush 流程默认按邮箱 `vc.ddom@gmail.com` 匹配系统 Chrome profile，并通过 Chrome DevTools WebSocket 复用该 profile 的登录态
 
 ## Semrush 调用方式
 
@@ -32,15 +32,31 @@
 
 - Node.js 22+
 - Chrome 已登录能访问目标 Google Sheet 的账号
-- Chrome 已开启 remote debugging
+- 本机已安装 Google Chrome
 
-如果脚本提示找不到 `DevToolsActivePort`，先在 Chrome 打开：
+Semrush 默认按 Chrome profile 邮箱 `vc.ddom@gmail.com` 匹配当前机器上的实际 profile 目录，再启动调试模式 Chrome：
 
-```text
-chrome://inspect/#remote-debugging
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=0 \
+  --user-data-dir="$HOME/Library/Application Support/Google/Chrome" \
+  --profile-directory="<匹配到的 Profile 目录>"
 ```
 
-然后允许 remote debugging，再重试。
+直接使用系统 Chrome profile 时，不复制 profile。运行前请关闭正在使用系统 Chrome profile 的普通 Chrome 窗口，否则 Chrome 可能复用现有进程并忽略 remote debugging 参数。
+
+以后日常先用这个入口启动 Chrome：
+
+```bash
+npm run chrome:semrush
+```
+
+可用环境变量覆盖：
+
+- `CHROME_PATH`
+- `CHROME_REMOTE_DEBUGGING_PORT`
+- `CHROME_USER_DATA_DIR`
+- `CHROME_PROFILE` 或 `CHROME_PROFILE_MATCH`：可填 profile 目录名、profile 名或邮箱
 
 ## 使用
 

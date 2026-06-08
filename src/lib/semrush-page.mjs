@@ -126,8 +126,74 @@ export async function openSemrushFromDash(cdp, sessionId) {
     `Boolean([...document.querySelectorAll("button")].find((button) => /打开/.test(button.innerText || button.textContent || "")))`,
     30000
   );
+  await selectHealthySemrushNode(cdp, sessionId);
   await clickByText(cdp, sessionId, { selector: "button", text: "打开", includes: true });
   await sleep(5000);
+}
+
+async function selectHealthySemrushNode(cdp, sessionId) {
+  const result = await evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const isVisible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const current = [...document.querySelectorAll("button.select-button")]
+        .find((button) => /节点/.test(clean(button.innerText || button.textContent)));
+      const overlayOpen = Boolean(document.querySelector(".cdk-overlay-pane"));
+      const currentText = clean(current?.innerText || current?.textContent);
+
+      if (!overlayOpen) {
+        current?.click();
+      }
+      return { ok: Boolean(current) || overlayOpen, opened: true, currentText };
+    })()`
+  );
+  if (!result.ok) {
+    return result;
+  }
+
+  await waitForCondition(
+    cdp,
+    sessionId,
+    `Boolean([...document.querySelectorAll(".cdk-overlay-pane .text-size-normal, .cdk-overlay-pane div")]
+      .find((item) => {
+        const text = String(item.innerText || item.textContent || "").replace(/\\s+/g, " ").trim();
+        return /节点/.test(text) && text.includes("✅") && !text.includes("❌");
+      }))`,
+    10000
+  );
+
+  const selected = await evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const isVisible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const options = [...document.querySelectorAll(".cdk-overlay-pane .text-size-normal, .cdk-overlay-pane div")]
+        .filter(isVisible)
+        .map((el) => ({ el, text: clean(el.innerText || el.textContent) }))
+        .filter((item) => /^节点\\d+\\b/.test(item.text));
+      const currentText = ${JSON.stringify(result.currentText || "")};
+      const healthy = options.filter((item) => item.text.includes("✅") && !item.text.includes("❌"));
+      const option = healthy.find((item) => item.text !== currentText) || healthy[0];
+      if (!option) {
+        return { ok: false, reason: "no healthy Semrush node option" };
+      }
+      option.el.click();
+      return { ok: true, text: option.text };
+    })()`
+  );
+  await sleep(700);
+  return selected;
 }
 
 export async function closeSemrushCoachmark(cdp, sessionId) {

@@ -7,11 +7,10 @@ import {
   attachChromePage,
   CdpClient,
   detachChromePage,
+  ensureChromeWebSocketEndpoint,
   navigateAndWait,
-  readChromeWebSocketEndpoint,
   waitForChromeTargetWithCdp
 } from "./lib/cdp.mjs";
-import { ensureChromeProfileTargetWithCdp } from "./lib/chrome-profiles.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
 import { writeCsv, writeJson } from "./lib/files.mjs";
 import { getSpreadsheetId } from "./lib/google-sheet.mjs";
@@ -81,13 +80,18 @@ async function findExistingWorkTarget(cdp) {
   );
 }
 
-async function openOrAttachWorkPage(cdp, chromeProfile) {
+async function openOrAttachWorkPage(cdp) {
   const existing = await findExistingWorkTarget(cdp);
   if (existing) {
     return attachChromePage(cdp, existing.targetId);
   }
 
-  const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, DASH_LOGIN_URL, 30000);
+  const { targetId } = await cdp.send("Target.createTarget", { url: DASH_LOGIN_URL });
+  const target = await waitForChromeTargetWithCdp(
+    cdp,
+    (item) => item.targetId === targetId || (item.type === "page" && item.url.startsWith(DASH_LOGIN_URL)),
+    30000
+  );
   return attachChromePage(cdp, target.targetId);
 }
 
@@ -223,9 +227,10 @@ async function approveRemoteDebuggingPrompt() {
 }
 
 async function connectChromeCdpWithRecovery() {
+  const endpoint = await ensureChromeWebSocketEndpoint({ initialUrl: DASH_LOGIN_URL });
   let lastError;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const cdp = new CdpClient(readChromeWebSocketEndpoint());
+    const cdp = new CdpClient(endpoint);
     try {
       await cdp.connect();
       if (attempt > 1) {
@@ -503,7 +508,11 @@ async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
     }
 
     if (current.kind === "dash_home") {
-      await openSemrushFromDash(cdp, page.sessionId);
+      await openSemrushFromDash(cdp, page.sessionId).catch((error) => {
+        if (!/Inspected target navigated or closed|No target with given id|Session closed/i.test(error.message || "")) {
+          throw error;
+        }
+      });
       state.openedSemrushFromDash = true;
       await saveState(statePath, state);
       page = await switchToLatestSemrushPage(cdp, page);
@@ -704,7 +713,7 @@ async function main() {
       requireTask: !isBatch
     });
     console.log("Attaching Semrush work page...");
-	    page = await openOrAttachWorkPage(cdp, config.chromeProfile);
+	    page = await openOrAttachWorkPage(cdp);
 
     const summaries = [];
     for (const taskRow of taskRows) {

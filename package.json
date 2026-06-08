@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "read:sheet": "node src/read-google-sheet.mjs",
+    "chrome:semrush": "node src/chrome-semrush.mjs",
     "semrush:step1": "node src/semrush-step1.mjs",
     "agent:keyword": "node src/keyword-agent.mjs",
     "bing:precheck": "node src/bing-precheck.mjs",

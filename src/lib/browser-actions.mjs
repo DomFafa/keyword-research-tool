@@ -20,7 +20,7 @@ export async function waitForCondition(cdp, sessionId, expression, timeoutMs = 3
 }
 
 export async function setInputValue(cdp, sessionId, selector, value) {
-  return evaluate(
+  const prepared = await evaluate(
     cdp,
     sessionId,
     `(() => {
@@ -29,11 +29,28 @@ export async function setInputValue(cdp, sessionId, selector, value) {
       el.focus();
       const setter = Object.getOwnPropertyDescriptor(el.constructor.prototype, "value")?.set;
       if (setter) {
-        setter.call(el, ${JSON.stringify(value)});
+        setter.call(el, "");
       } else {
-        el.value = ${JSON.stringify(value)};
+        el.value = "";
       }
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: ${JSON.stringify(value)} }));
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward", data: "" }));
+      return { ok: true };
+    })()`
+  );
+  if (!prepared.ok) {
+    throw new Error(prepared.reason || `Unable to set input ${selector}`);
+  }
+
+  if (String(value || "")) {
+    await cdp.send("Input.insertText", { text: String(value) }, sessionId);
+  }
+
+  return evaluate(
+    cdp,
+    sessionId,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return { ok: false, reason: "selector not found", selector: ${JSON.stringify(selector)} };
       el.dispatchEvent(new Event("change", { bubbles: true }));
       return { ok: true, value: el.value };
     })()`
