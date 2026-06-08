@@ -204,7 +204,6 @@ async function clickByLabels(cdp, sessionId, labels, {
 }
 
 async function clickPoint(cdp, sessionId, point) {
-  await cdp.send("Page.bringToFront", {}, sessionId).catch(() => {});
   await cdp.send("Input.dispatchMouseEvent", {
     type: "mouseMoved",
     x: point.x,
@@ -562,7 +561,6 @@ function domainSearchExpression(domain) {
 }
 
 async function submitDomainSearch(cdp, sessionId, domain) {
-  await cdp.send("Page.bringToFront", {}, sessionId).catch(() => {});
   const prepared = await evaluate(cdp, sessionId, domainSearchExpression(domain), 15000);
   if (!prepared?.ok) {
     throw new Error(prepared?.reason || "Unable to set domain search input");

@@ -278,7 +278,6 @@ async function main() {
   try {
     if (plannedRows.length > 0) {
       page = await findOrOpenAddressPage(cdp);
-      await cdp.send("Page.bringToFront", {}, page.sessionId).catch(() => {});
     }
 
     for (const row of plannedRows) {
