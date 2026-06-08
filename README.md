@@ -10,12 +10,23 @@
 - 用匹配到的 profile 读取 `词根拓展` 子表
 - 执行 Semrush 第一步词根拓展流程：
   - 识别当前页面是在 3ue 登录页、3ue 首页、Semrush 首页、关键词概览页，还是关键词魔法工具页
-  - 按 `词根拓展` 的 `词根`、`匹配类型`、`搜索量范围`、`KD范围` 设置页面
-  - 采集 Keyword Magic 表格分页里的 `关键词`、`搜索量`、`KD`
+  - 通过 Semrush 前端内部 RPC 查询 `词根拓展` 的 `词根`、`匹配类型`、`搜索量范围`、`KD范围`
+  - 采集 Keyword Magic RPC 返回的 `关键词`、`搜索量`、`KD`
+  - 关键词模式通过 Keyword Overview RPC 返回本地/全球搜索量和 KD
   - 输出本地 CSV/JSON，并写入 `关键词总表` 的 A-D 列
 - 输出结构化 JSON：`output/google-sheet-input.json`
 - 不需要 Google API key 或 OAuth 应用
 - 通过 Chrome DevTools WebSocket 复用本机 Chrome 登录态
+
+## Semrush 调用方式
+
+- Keyword Magic：`POST /kmtgw/v2/webapi`
+  - `ideas.GetKeywordsSummary` 获取筛选后的总关键词数
+  - `ideas.GetKeywords` 分页获取关键词列表
+- Keyword Overview：`POST /kwogw/v2/webapi`
+  - `keywords.GetInfo` 获取搜索量和 KD
+
+脚本仍然需要先通过 Chrome 登录态进入 `sem.3ue.com`，RPC 请求在页面上下文内发出，以复用当前 3ue/Semrush 会话。
 
 ## 环境要求
 
@@ -109,4 +120,4 @@ output/semrush-step1/root-generator.state.json
 }
 ```
 
-下一步会在这个读取层之上接 Semrush 页面采集脚本。
+Semrush 第一步会输出候选关键词，本地文件可直接用于后续筛选和写表。

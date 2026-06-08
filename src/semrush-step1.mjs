@@ -6,7 +6,6 @@ import { readArg, readFlag } from "./lib/args.mjs";
 import {
   attachChromePage,
   CdpClient,
-  createChromePage,
   detachChromePage,
   navigateAndWait,
   readChromeWebSocketEndpoint,
@@ -15,10 +14,7 @@ import {
 import { ensureChromeProfileTargetWithCdp } from "./lib/chrome-profiles.mjs";
 import { sleep } from "./lib/browser-actions.mjs";
 import { writeCsv, writeJson } from "./lib/files.mjs";
-import {
-  getSpreadsheetId,
-  readSheetInSession
-} from "./lib/google-sheet.mjs";
+import { getSpreadsheetId } from "./lib/google-sheet.mjs";
 import {
   batchUpdateSheet,
   formatRejectedKeywordCells,
@@ -45,22 +41,13 @@ import {
   readToolConfig
 } from "./lib/tool-config.mjs";
 import {
-  applyRangeFilter,
-  clickNextPage,
-  clickViewAllKeywords,
   closeSemrushCoachmark,
-  countryDatabaseCode,
   detectPage,
-  ensureFirstKeywordMagicPage,
-  extractKeywordOverviewMetrics,
-  extractKeywordRows,
+  fetchKeywordMagicPage,
+  fetchKeywordMagicSummary,
+  fetchKeywordOverviewMetrics,
   loginDash,
-  navigateToKeywordOverview,
-  openSemrushFromDash,
-  searchKeywordMagicInPlace,
-  searchSemrush,
-  selectMatchType,
-  validateMagicPhrase
+  openSemrushFromDash
 } from "./lib/semrush-page.mjs";
 
 const DASH_LOGIN_URL = "https://dash.3ue.com/zh-Hans/#/login";
@@ -118,52 +105,34 @@ async function switchToLatestSemrushPage(cdp, currentPage) {
   return attachChromePage(cdp, target.targetId);
 }
 
-async function collectAllKeywordPages(cdp, sessionId, task, maxPages) {
+async function collectAllKeywordPagesViaRpc(cdp, sessionId, task, maxPages) {
   const allRows = [];
   const seen = new Set();
-  let filteredKeywordCount = null;
+  const summary = await fetchKeywordMagicSummary(cdp, sessionId, task);
+  const totalPages = summary.total ? Math.ceil(summary.total / 100) : Number.POSITIVE_INFINITY;
+  const pageLimit = Math.min(maxPages, totalPages);
   let page = 1;
 
-  while (page <= maxPages) {
-    const result = await extractKeywordRows(cdp, sessionId, {
-      root: task.rootKeyword,
-      query: task.query,
-      page
-    });
-	    if (!result.ok) {
-	      throw new Error(result.reason || "Unable to extract keyword rows");
-	    }
-    if (result.filteredKeywordCount) {
-      filteredKeywordCount = result.filteredKeywordCount;
+  while (page <= pageLimit) {
+    const result = await fetchKeywordMagicPage(cdp, sessionId, task, page);
+    for (const row of result.rows) {
+      const key = `${row.keyword}\t${row.volume}\t${row.kd}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        allRows.push(row);
+      }
     }
 
-	    for (const row of result.rows) {
-	      const key = `${row.keyword}\t${row.volume}\t${row.kd}`;
-	      if (!seen.has(key)) {
-	        seen.add(key);
-	        allRows.push(row);
-	      }
-	    }
-    const currentPage = result.pagination?.currentPage || page;
-    const totalPages = result.pagination?.totalPages || null;
-    const pageLabel = totalPages ? `${currentPage}/${totalPages}` : String(currentPage);
-    console.log(`Collect page ${pageLabel}: ${result.rows.length} row(s), ${allRows.length} total unique row(s).`);
+    const pageLabel = Number.isFinite(totalPages) ? `${page}/${totalPages}` : String(page);
+    console.log(`Collect RPC page ${pageLabel}: ${result.rows.length} row(s), ${allRows.length} total unique row(s).`);
 
-    if (totalPages && currentPage >= totalPages) {
-      break;
-    }
-    if (totalPages && page >= totalPages) {
-      break;
-    }
-
-	    const hasNext = await clickNextPage(cdp, sessionId);
-	    if (!hasNext) {
+    if (result.rows.length === 0 || result.rows.length < 100) {
       break;
     }
     page += 1;
   }
 
-  allRows.filteredKeywordCount = filteredKeywordCount;
+  allRows.filteredKeywordCount = summary.total || allRows.length;
   return allRows;
 }
 
@@ -510,195 +479,71 @@ async function updateKeywordTaskStatusSheet(cdp, sheetPage, sheetUrl, sheet, tas
   ]);
 }
 
-async function recoverFromPageError(cdp, page, state, statePath, current, task, error) {
-  state.recoveryAttempts = state.recoveryAttempts || {};
-  const key = current.kind || "unknown";
-  const attempts = (state.recoveryAttempts[key] || 0) + 1;
-  state.recoveryAttempts[key] = attempts;
-  state.lastRecoveryError = {
-    page: key,
-    message: error.message || String(error)
-  };
+async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
+  const { task, toolAccount } = config;
+  const semrushUsername = toolAccount["semrush账号"] || "";
+  const semrushPassword = toolAccount["semrush密码"] || toolAccount["密码"] || "";
 
-  if (attempts >= 5) {
-    await saveState(statePath, state);
-    throw new Error(`页面 ${key} 连续恢复 ${attempts} 次失败: ${error.message || String(error)}`);
+  if (!semrushUsername || !semrushPassword) {
+    throw new Error("工具账号密码 子表缺少 semrush账号 或 semrush密码");
   }
 
-  console.warn(`Recover ${key} after error (${attempts}/5): ${error.message || String(error)}`);
-  state.matchTypeApplied = false;
-  state.volumeFilterApplied = false;
-  state.kdFilterApplied = false;
-  state.magicPhraseValidated = false;
+  for (let step = 0; step < 12; step += 1) {
+    await closeSemrushCoachmark(cdp, page.sessionId);
+    const current = await detectPage(cdp, page.sessionId);
+    state.lastDetectedPage = current;
+    await saveState(statePath, state);
+    console.log(`Page: ${current.kind} ${current.url}`);
 
-  if (["semrush_keyword_magic", "semrush_keyword_overview", "semrush_home", "semrush_error"].includes(key)) {
-    await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry).catch(async () => {
-      await searchSemrush(cdp, page.sessionId, task.query).catch(async () => {
-        await navigateAndWait(cdp, page.sessionId, DASH_LOGIN_URL, 45000).catch(async () => {
-          await sleep(3000);
-        });
-      });
-    });
-  } else {
+    if (current.kind === "dash_login") {
+      await loginDash(cdp, page.sessionId, semrushUsername, semrushPassword);
+      state.dashLoggedIn = true;
+      await saveState(statePath, state);
+      continue;
+    }
+
+    if (current.kind === "dash_home") {
+      await openSemrushFromDash(cdp, page.sessionId);
+      state.openedSemrushFromDash = true;
+      await saveState(statePath, state);
+      page = await switchToLatestSemrushPage(cdp, page);
+      continue;
+    }
+
+    if (current.kind.startsWith("semrush_")) {
+      if (task.mode === "keyword") {
+        const metrics = await fetchKeywordOverviewMetrics(cdp, page.sessionId, task.query, task.matchCountry);
+        const hasCountry = Boolean(task.matchCountry);
+        const rows = [{
+          root: "",
+          keyword: task.query,
+          country: hasCountry ? task.matchCountry : "全球",
+          volume: hasCountry ? metrics.localVolume : metrics.globalVolume,
+          kd: metrics.kd,
+          semrush_page: "keyword_overview"
+        }];
+        state.keywordOverviewMetrics = metrics;
+        state.collectedRows = rows.length;
+        state.filteredKeywordCount = rows.length;
+        state.completed = true;
+        await saveState(statePath, state);
+        return { page, rows, filteredKeywordCount: rows.length };
+      }
+
+      const rows = await collectAllKeywordPagesViaRpc(cdp, page.sessionId, task, maxPages);
+      state.collectedRows = rows.length;
+      state.filteredKeywordCount = rows.filteredKeywordCount || rows.length;
+      state.completed = true;
+      await saveState(statePath, state);
+      return { page, rows, filteredKeywordCount: state.filteredKeywordCount };
+    }
+
     await navigateAndWait(cdp, page.sessionId, DASH_LOGIN_URL, 45000).catch(async () => {
       await sleep(3000);
     });
   }
 
-  await saveState(statePath, state);
-}
-
-async function runSemrushFlow(cdp, page, config, state, statePath, maxPages) {
-  const { task, toolAccount } = config;
-  const semrushUsername = toolAccount["semrush账号"] || "";
-  const semrushPassword = toolAccount["semrush密码"] || toolAccount["密码"] || "";
-  const expectedDb = countryDatabaseCode(task.matchCountry) || "us";
-
-  if (!semrushUsername || !semrushPassword) {
-    throw new Error("工具账号密码 子表缺少 semrush账号 或 semrush密码");
-  }
-	  for (let step = 0; step < 30; step += 1) {
-	    await closeSemrushCoachmark(cdp, page.sessionId);
-	    const current = await detectPage(cdp, page.sessionId);
-    state.lastDetectedPage = current;
-    await saveState(statePath, state);
-    console.log(`Page: ${current.kind} ${current.url}`);
-
-    try {
-      if (current.kind === "dash_login") {
-        await loginDash(cdp, page.sessionId, semrushUsername, semrushPassword);
-        state.dashLoggedIn = true;
-        await saveState(statePath, state);
-        continue;
-      }
-
-      if (current.kind === "dash_home") {
-        await openSemrushFromDash(cdp, page.sessionId);
-        state.openedSemrushFromDash = true;
-        await saveState(statePath, state);
-        page = await switchToLatestSemrushPage(cdp, page);
-        continue;
-      }
-
-      if (current.kind === "semrush_home") {
-        await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry);
-        state.searchedQuery = task.query;
-        await saveState(statePath, state);
-        continue;
-      }
-
-      if (current.kind === "semrush_keyword_overview") {
-        if (
-          (current.query || "").trim().toLowerCase() !== task.query.toLowerCase() ||
-          ((current.db || "").trim().toLowerCase() !== expectedDb)
-        ) {
-          await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry);
-          state.searchedQuery = task.query;
-          state.searchedDb = expectedDb;
-          await saveState(statePath, state);
-          continue;
-        }
-
-        if (task.mode === "keyword") {
-          const metrics = await extractKeywordOverviewMetrics(cdp, page.sessionId, task.query);
-          const hasCountry = Boolean(task.matchCountry);
-          const rows = [{
-            root: "",
-            keyword: task.query,
-            country: hasCountry ? task.matchCountry : "全球",
-            volume: hasCountry ? metrics.localVolume : metrics.globalVolume,
-            kd: metrics.kd,
-            semrush_page: "keyword_overview"
-          }];
-          state.keywordOverviewMetrics = metrics;
-          state.collectedRows = rows.length;
-          state.filteredKeywordCount = rows.length;
-          state.completed = true;
-          await saveState(statePath, state);
-          return { page, rows, filteredKeywordCount: rows.length };
-        }
-
-        await clickViewAllKeywords(cdp, page.sessionId);
-        state.openedKeywordMagic = true;
-        await saveState(statePath, state);
-        continue;
-      }
-
-      if (current.kind === "semrush_keyword_magic") {
-        if (task.mode === "keyword") {
-          await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry);
-          state.keywordModeReturnedToOverview = true;
-          await saveState(statePath, state);
-          continue;
-        }
-
-        const actualPhrase = (current.phrase || "").trim();
-        if (
-          actualPhrase && actualPhrase.toLowerCase() !== task.query.toLowerCase() ||
-          current.query && current.query.toLowerCase() !== task.query.toLowerCase() ||
-          ((current.db || "").trim().toLowerCase() !== expectedDb)
-        ) {
-          state.magicPhraseMismatch = {
-            expected: task.query,
-            actual: actualPhrase || current.query,
-            expectedDb,
-            actualDb: current.db || ""
-          };
-          state.matchTypeApplied = false;
-          state.volumeFilterApplied = false;
-          state.kdFilterApplied = false;
-          state.magicSearchResult = await navigateToKeywordOverview(cdp, page.sessionId, task.query, task.matchCountry);
-          state.searchedQuery = task.query;
-          await saveState(statePath, state);
-          continue;
-        }
-
-        await validateMagicPhrase(cdp, page.sessionId, task.query);
-        state.magicPhraseValidated = true;
-        await saveState(statePath, state);
-
-        state.matchTypeResult = await selectMatchType(cdp, page.sessionId, task.matchType);
-        state.matchTypeApplied = true;
-        await saveState(statePath, state);
-
-        state.volumeFilterResult = await applyRangeFilter(
-          cdp,
-          page.sessionId,
-          "搜索量",
-          task.volumeMin,
-          task.volumeMax
-        );
-        state.volumeFilterApplied = true;
-        await saveState(statePath, state);
-
-        state.kdFilterResult = await applyRangeFilter(
-          cdp,
-          page.sessionId,
-          "KD %",
-          task.kdMin,
-          task.kdMax
-        );
-        state.kdFilterApplied = true;
-        await saveState(statePath, state);
-
-        await ensureFirstKeywordMagicPage(cdp, page.sessionId);
-        const rows = await collectAllKeywordPages(cdp, page.sessionId, task, maxPages);
-        state.collectedRows = rows.length;
-        state.filteredKeywordCount = rows.filteredKeywordCount || rows.length;
-        state.completed = true;
-        await saveState(statePath, state);
-        return { page, rows, filteredKeywordCount: state.filteredKeywordCount };
-      }
-
-      await navigateAndWait(cdp, page.sessionId, DASH_LOGIN_URL, 45000).catch(async () => {
-        await sleep(3000);
-      });
-    } catch (error) {
-      await recoverFromPageError(cdp, page, state, statePath, current, task, error);
-    }
-	  }
-
-  throw new Error("Semrush workflow did not reach a terminal state within 30 steps.");
+  throw new Error("Semrush workflow did not reach a terminal state within 12 steps.");
 }
 
 async function runOneTask({
@@ -733,11 +578,11 @@ async function runOneTask({
     : task.matchCountry;
   const rawOutputRows = toOutputRows(result.rows, { country: outputCountry });
   const keywordOverviewRows = rawOutputRows.map((row) => ({
-          ...row,
-          判断: "继续",
-          机器筛选状态: "跳过",
-          机器筛选原因: "keyword_overview_flow"
-        }));
+    ...row,
+    判断: "继续",
+    机器筛选状态: "跳过",
+    机器筛选原因: "keyword_overview_flow"
+  }));
   const keywordFilterResult = task.mode === "keyword"
     ? {
         rows: keywordOverviewRows,
