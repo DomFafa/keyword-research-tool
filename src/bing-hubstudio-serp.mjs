@@ -36,6 +36,7 @@ import { formatCellBackgrounds, getSheetValues, updateSheetValues } from "./lib/
 import { DEFAULT_SHEET_URL } from "./lib/tool-config.mjs";
 import { columnName, headerIndex, optionalHeaderIndex, valuesToTable } from "./lib/table-utils.mjs";
 import { writeJson } from "./lib/files.mjs";
+import { readHubstudioFingerprintCache } from "./lib/hubstudio-api.mjs";
 
 const TASK_SHEET = "词根拓展";
 const KEYWORD_TOTAL_SHEET = "关键词总表";
@@ -59,11 +60,78 @@ function isBingTopUrlsEmptyMessage(message) {
 }
 
 async function readRequiredSheet(sheetUrl, range) {
-  const result = await getSheetValues({ sheetUrl, range });
-  if (!result.ok) {
-    throw new Error(`读取 ${range} 失败: ${result.reason || "unknown error"}`);
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const result = await getSheetValues({ sheetUrl, range });
+      if (result.ok) {
+        return valuesToTable(result.values || []);
+      }
+      lastError = new Error(`读取 ${range} 失败: ${result.reason || "unknown error"}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) {
+      await sleep(1500 * attempt);
+    }
   }
-  return valuesToTable(result.values || []);
+  throw lastError || new Error(`读取 ${range} 失败`);
+}
+
+function readCachedHubstudioFingerprints({ startFingerprintName = "", limit = 0 } = {}) {
+  const cache = readHubstudioFingerprintCache();
+  const rows = Object.values(cache.fingerprints || {})
+    .map((fingerprint) => {
+      const serialNumber = Number(fingerprint.serialNumber);
+      if (!Number.isFinite(serialNumber) || serialNumber <= 0 || !fingerprint.containerCode) {
+        return null;
+      }
+      return {
+        rowNumber: serialNumber,
+        fingerprintName: String(serialNumber),
+        serialNumber,
+        containerCode: String(fingerprint.containerCode),
+        containerName: String(fingerprint.containerName || ""),
+        coreVersion: fingerprint.coreVersion ?? null,
+        region: "",
+        email: "",
+        password: "",
+        recoverEmail: "",
+        fallbackPassword: ""
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.serialNumber - b.serialNumber);
+
+  const start = String(startFingerprintName || "").trim();
+  const startIndex = start
+    ? rows.findIndex((row) => String(row.fingerprintName || "").trim() === start)
+    : 0;
+  if (start && startIndex === -1) {
+    throw new Error(`本地 Hubstudio 缓存中没有找到指纹名称: ${start}`);
+  }
+  const selected = rows.slice(start ? startIndex : 0);
+  return limit > 0 ? selected.slice(0, limit) : selected;
+}
+
+async function readHubstudioFingerprintsWithFallback({ startFingerprintName = "", fingerprintLimit = 0 } = {}) {
+  try {
+    return await readFeishuBingRegistry({
+      startFingerprintName,
+      limit: fingerprintLimit,
+      requireBingApi: true
+    });
+  } catch (error) {
+    console.warn(`Feishu Hubstudio registry unavailable, fallback to local cache: ${error.message || String(error)}`);
+    const cached = readCachedHubstudioFingerprints({
+      startFingerprintName,
+      limit: fingerprintLimit
+    });
+    if (cached.length === 0) {
+      throw error;
+    }
+    return cached;
+  }
 }
 
 function buildRuleIndex(taskTable) {
@@ -705,6 +773,7 @@ async function main() {
   const fingerprintLimit = Number(readArg("fingerprint-limit", "0")) || 0;
   const maxRowsPerFingerprint = Number(readArg("max-rows-per-fingerprint", "90")) || 90;
   const rowRetries = Number(readArg("row-retries", "2")) || 2;
+  const rowDelayMs = Number(readArg("row-delay-ms", "1500")) || 0;
   const topUrlEmptySwitchAttempts = Number(readArg("top-url-empty-switch-attempts", "3")) || 3;
   const bingAuthMode = readArg("bing-auth", "auto");
   const proxyUpdateMode = readArg("proxy-update", "auto");
@@ -714,7 +783,7 @@ async function main() {
   const [taskTable, keywordTable, fingerprints] = await Promise.all([
     readRequiredSheet(sheetUrl, `${TASK_SHEET}!A:Z`),
     readRequiredSheet(sheetUrl, `${KEYWORD_TOTAL_SHEET}!A:AZ`),
-    readFeishuBingRegistry({ startFingerprintName, limit: fingerprintLimit, requireBingApi: true })
+    readHubstudioFingerprintsWithFallback({ startFingerprintName, fingerprintLimit })
   ]);
   if (fingerprints.length === 0) {
     throw new Error(`飞书 api 注册中没有可用指纹，从 ${startFingerprintName} 开始`);
@@ -865,7 +934,9 @@ async function main() {
           };
           summaries.push(summary);
           console.log(`Row ${keywordRow.rowNumber}: ${keyword} -> ${precheck.judgement}, top5=${competition.count}, fp=${activeFingerprint.fingerprintName}`);
-          await sleep(1500);
+          if (rowDelayMs > 0) {
+            await sleep(rowDelayMs);
+          }
         } catch (error) {
           const message = error.message || String(error);
           console.warn(`Row ${keywordRow.rowNumber} attempt ${attempt}/${rowRetries} failed on fp=${activeFingerprint?.fingerprintName}: ${message}`);
