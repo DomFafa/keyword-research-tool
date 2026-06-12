@@ -214,7 +214,7 @@ export function buildRuleIndex(taskTable) {
   return { rootRules, keywordRules };
 }
 
-export function findRule(keywordRow, ruleIndex) {
+export function findRule(keywordRow, ruleIndex, { duplicateRule = "error" } = {}) {
   const root = normalizeKey(keywordRow.record["词根"]);
   const keyword = normalizeKey(keywordRow.record["关键词"]);
   const source = root ? `词根=${root}` : `关键词=${keyword}`;
@@ -227,6 +227,10 @@ export function findRule(keywordRow, ruleIndex) {
   }
   if (candidates.length === 1) {
     return candidates[0].record;
+  }
+  if (duplicateRule === "latest") {
+    return [...candidates]
+      .sort((a, b) => Number(b.rowNumber || 0) - Number(a.rowNumber || 0))[0].record;
   }
   const taskRows = candidates
     .map((candidate) => candidate.rowNumber)
@@ -271,7 +275,8 @@ export function collectKeywordAgentPendingRows({
   fromRow = 0,
   toRow = 0,
   limit = DEFAULT_LIMIT,
-  force = false
+  force = false,
+  duplicateRule = "error"
 }) {
   const bingSecondIndex = normalizedHeaderIndex(keywordTable.headers, "bing二次判断");
   const keywordIndex = normalizedHeaderIndex(keywordTable.headers, "关键词");
@@ -311,7 +316,7 @@ export function collectKeywordAgentPendingRows({
       continue;
     }
 
-    const rule = findRule(row, ruleIndex);
+    const rule = findRule(row, ruleIndex, { duplicateRule });
     if (!rule) {
       summaries.push({
         row: row.rowNumber,
@@ -450,6 +455,7 @@ async function main() {
   const planOnly = readFlag("plan-only") || readFlag("preflight");
   const requireAgentStatusColumn = readFlag("require-agent-status-column");
   const force = readFlag("force");
+  const duplicateRule = readArg("duplicate-rule", "error");
   const mode = readArg("mode", "llm");
   const model = readArg("model", process.env.OPENAI_MODEL || "");
   const out = readArg("out", "output/keyword-agent/last-run-summary.json");
@@ -474,7 +480,8 @@ async function main() {
     fromRow,
     toRow,
     limit,
-    force
+    force,
+    duplicateRule
   });
   const selectedRows = collected.selectedRows;
   let pending = collected.pending;
@@ -492,6 +499,7 @@ async function main() {
       model,
       dryRun,
       force,
+      duplicateRule,
       limit,
       fromRow,
       toRow,
