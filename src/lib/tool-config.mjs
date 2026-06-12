@@ -5,10 +5,11 @@ import {
 import {
   attachChromePage,
   createChromePage,
-  detachChromePage,
-  navigateAndWait
+  detachChromePage
 } from "./cdp.mjs";
-import { getGid, getSpreadsheetId, readSheetInSession } from "./google-sheet.mjs";
+import { rowsToObjects } from "./csv.mjs";
+import { getGid, getSpreadsheetId } from "./google-sheet.mjs";
+import { getSheetValues } from "./google-sheets-api.mjs";
 
 export const DEFAULT_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/1Ea3mSRW431QP08sq9tn3VoYEkj52hNRzY_GVizVLy3A/edit?gid=0#gid=0";
@@ -30,6 +31,37 @@ function findExistingSheetTarget(targetInfos, spreadsheetId) {
       target.type === "page" &&
       target.url.includes(`/spreadsheets/d/${spreadsheetId}`)
   );
+}
+
+function quoteSheetName(sheetName) {
+  return `'${String(sheetName).replaceAll("'", "''")}'`;
+}
+
+async function readSheetWithApi({ sheetUrl, sheetName, expectedHeaders = [] }) {
+  const result = await getSheetValues({
+    sheetUrl,
+    range: `${quoteSheetName(sheetName)}!A:Z`
+  });
+  if (!result.ok) {
+    throw new Error(`读取 ${sheetName} 失败: ${result.reason || "unknown error"}`);
+  }
+
+  const rawRows = result.values || [];
+  const headers = rawRows[0] || [];
+  const missing = expectedHeaders.filter((header) => !headers.includes(header));
+  if (missing.length > 0) {
+    throw new Error(
+      `${sheetName} 表头缺失: ${missing.join(", ")}. 当前表头: ${headers.join(", ")}`
+    );
+  }
+
+  return {
+    range: result.range,
+    headers,
+    rows: rowsToObjects(rawRows),
+    rawRows,
+    clientEmail: result.clientEmail
+  };
 }
 
 export function getRequiredValue(record, key) {
@@ -102,26 +134,16 @@ export async function readToolConfig(cdp, options) {
     requireTask = true
   } = options;
 
-	  let bootstrapPage;
-	  let closeBootstrapPage = false;
-	  let targetPage;
+  let bootstrapPage;
+  let closeBootstrapPage = false;
+  let targetPage;
 
   try {
     const spreadsheetId = getSpreadsheetId(sheetUrl);
     const { targetInfos = [] } = await cdp.send("Target.getTargets");
-	    const existingSheetTarget = findExistingSheetTarget(targetInfos, spreadsheetId);
+    const existingSheetTarget = findExistingSheetTarget(targetInfos, spreadsheetId);
 
-    if (existingSheetTarget) {
-      bootstrapPage = await attachChromePage(cdp, existingSheetTarget.targetId);
-    } else {
-      bootstrapPage = await createChromePage(cdp);
-      closeBootstrapPage = true;
-      await navigateAndWait(cdp, bootstrapPage.sessionId, "https://docs.google.com/", 30000);
-    }
-
-    const accountSheet = await readSheetInSession({
-      cdp,
-      sessionId: bootstrapPage.sessionId,
+    const accountSheet = await readSheetWithApi({
       sheetUrl,
       sheetName: accountSheetName,
       expectedHeaders: ["semrush账号", "semrush密码"]
@@ -134,24 +156,23 @@ export async function readToolConfig(cdp, options) {
     ]);
     const chromeProfile = findChromeProfile(browserAccount);
 
-	    if (existingSheetTarget) {
-	      targetPage = bootstrapPage;
-	    } else {
-	      const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, sheetUrl);
-	      targetPage = await attachChromePage(cdp, target.targetId);
-	    }
+    if (existingSheetTarget) {
+      bootstrapPage = await attachChromePage(cdp, existingSheetTarget.targetId);
+      targetPage = bootstrapPage;
+    } else {
+      bootstrapPage = await createChromePage(cdp);
+      closeBootstrapPage = true;
+      const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, sheetUrl);
+      targetPage = await attachChromePage(cdp, target.targetId);
+    }
 
-    const keywordSheet = await readSheetInSession({
-      cdp,
-      sessionId: targetPage.sessionId,
+    const keywordSheet = await readSheetWithApi({
       sheetUrl,
       sheetName: keywordSheetName,
       expectedHeaders: ["词根", "关键词"]
     });
 
-    const keywordTotalSheet = await readSheetInSession({
-      cdp,
-      sessionId: targetPage.sessionId,
+    const keywordTotalSheet = await readSheetWithApi({
       sheetUrl,
       sheetName: keywordTotalSheetName,
       expectedHeaders: ["词根", "关键词", "国家", "搜索量", "KD"]

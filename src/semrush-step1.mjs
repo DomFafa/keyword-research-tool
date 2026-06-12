@@ -97,15 +97,40 @@ async function findExistingWorkTarget(cdp) {
 async function openOrAttachWorkPage(cdp, chromeProfile) {
   const existing = await findExistingWorkTarget(cdp);
   if (existing) {
-    return attachChromePage(cdp, existing.targetId);
+    try {
+      return await attachChromePage(cdp, existing.targetId);
+    } catch (error) {
+      if (!/No target with given id found|Session with given id not found/i.test(error?.message || "")) {
+        throw error;
+      }
+    }
   }
 
   const target = await ensureChromeProfileTargetWithCdp(cdp, chromeProfile, DASH_LOGIN_URL, 30000);
   return attachChromePage(cdp, target.targetId);
 }
 
+async function closeWorkPage(cdp, page) {
+  if (!page) {
+    return;
+  }
+  await detachChromePage(cdp, page.sessionId).catch(() => {});
+  await cdp.send("Target.closeTarget", { targetId: page.targetId }).catch(() => {});
+}
+
+async function closeAllWorkTargets(cdp) {
+  const { targetInfos = [] } = await cdp.send("Target.getTargets").catch(() => ({ targetInfos: [] }));
+  for (const target of targetInfos) {
+    if (
+      target.type === "page" &&
+      (/sem\.3ue\.com|dash\.3ue\.com/.test(target.url || ""))
+    ) {
+      await cdp.send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+    }
+  }
+}
+
 async function switchToLatestSemrushPage(cdp, currentPage) {
-  await sleep(3000);
   const target = await waitForChromeTargetWithCdp(
     cdp,
     (item) => item.type === "page" && item.url.includes("sem.3ue.com"),
@@ -382,6 +407,7 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
     values: buildKeywordTotalValues(rows)
   });
   if (!writeResult.ok && /exceeds grid limits/i.test(writeResult.reason || "")) {
+    const appendedRowCount = Math.max(rows.length + 100, 500);
     const expandResult = await batchUpdateSheet({
       sheetUrl,
       requests: [
@@ -389,13 +415,38 @@ async function pasteRowsToKeywordTotalSheet(cdp, sheetPage, sheetUrl, sheetName,
           appendDimension: {
             sheetId: Number(gid),
             dimension: "ROWS",
-            length: Math.max(rows.length + 100, 500)
+            length: appendedRowCount
           }
         }
       ]
     });
     if (!expandResult.ok) {
       throw new Error(`扩展 ${sheetName} 行数失败: ${expandResult.reason || "unknown error"}`);
+    }
+    const clearBufferFormatResult = await batchUpdateSheet({
+      sheetUrl,
+      requests: [
+        {
+          repeatCell: {
+            range: {
+              sheetId: Number(gid),
+              startRowIndex: startRow - 1,
+              endRowIndex: startRow + appendedRowCount - 1,
+              startColumnIndex: 1,
+              endColumnIndex: 2
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: { red: 1, green: 1, blue: 1 }
+              }
+            },
+            fields: "userEnteredFormat.backgroundColor"
+          }
+        }
+      ]
+    });
+    if (!clearBufferFormatResult.ok) {
+      throw new Error(`清理 ${sheetName} 预留行关键词背景色失败: ${clearBufferFormatResult.reason || "unknown error"}`);
     }
     writeResult = await updateSheetValues({
       sheetUrl,
@@ -846,10 +897,12 @@ async function main() {
   const skipSheetWrite = readFlag("skip-sheet-write");
   const force = readFlag("force");
   const stopOnError = readFlag("stop-on-error");
+  const restartWorkPageEvery = Number(readArg("restart-work-page-every", "0")) || 0;
 
 	  const cdp = await connectChromeCdpWithRecovery();
 
   let page;
+  let handledSinceWorkPageRestart = 0;
   let config;
 	  try {
     console.log("Reading Google Sheet config...");
@@ -859,10 +912,17 @@ async function main() {
       requireTask: !isBatch
     });
     console.log("Attaching Semrush work page...");
+    if (restartWorkPageEvery > 0) {
+      await closeAllWorkTargets(cdp);
+    }
 	    page = await openOrAttachWorkPage(cdp, config.chromeProfile);
 
     const summaries = [];
-    for (const taskRow of taskRows) {
+    for (let taskIndex = 0; taskIndex < taskRows.length; taskIndex += 1) {
+      const taskRow = taskRows[taskIndex];
+      if (!page) {
+        page = await openOrAttachWorkPage(cdp, config.chromeProfile);
+      }
       const row = config.keywordSheet.rows[taskRow - 2];
       if (!hasTaskInput(row)) {
         console.log(`Skip row ${taskRow}: empty task row.`);
@@ -890,6 +950,19 @@ async function main() {
         });
         page = result.page;
         summaries.push(result.summary);
+        handledSinceWorkPageRestart += 1;
+        if (
+          restartWorkPageEvery > 0 &&
+          handledSinceWorkPageRestart >= restartWorkPageEvery &&
+          taskIndex < taskRows.length - 1
+        ) {
+          await closeWorkPage(cdp, page).catch((error) => {
+            console.warn(`Unable to close Semrush work page after row ${taskRow}: ${shortErrorMessage(error)}`);
+          });
+          await closeAllWorkTargets(cdp);
+          page = null;
+          handledSinceWorkPageRestart = 0;
+        }
       } catch (error) {
         const status = `失败：${shortErrorMessage(error)}`;
         console.error(`Row ${taskRow} failed: ${shortErrorMessage(error)}`);

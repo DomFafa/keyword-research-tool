@@ -55,8 +55,13 @@ export async function openSemrushFromDash(cdp, sessionId) {
     `Boolean([...document.querySelectorAll("button")].find((button) => /打开/.test(button.innerText || button.textContent || "")))`,
     30000
   );
-  await clickByText(cdp, sessionId, { selector: "button", text: "打开", includes: true });
-  await sleep(5000);
+  await clickByText(cdp, sessionId, {
+    selector: "button",
+    text: "打开",
+    includes: true,
+    inputClick: true
+  });
+  await sleep(100);
 }
 
 export async function searchSemrush(cdp, sessionId, query) {
@@ -289,12 +294,25 @@ export async function extractKeywordOverviewMetrics(cdp, sessionId, query) {
 }
 
 export async function clickViewAllKeywords(cdp, sessionId) {
-  await waitForCondition(
-    cdp,
-    sessionId,
-    `Boolean([...document.querySelectorAll("a, button, span")].find((el) => /查看全部[\\s\\S]*个关键词/.test(el.innerText || el.textContent || "")))`,
-    45000
-  );
+  try {
+    await waitForCondition(
+      cdp,
+      sessionId,
+      `Boolean([...document.querySelectorAll("a, button, span")].find((el) => /查看全部[\\s\\S]*个关键词/.test(el.innerText || el.textContent || "")))`,
+      45000
+    );
+  } catch (error) {
+    const currentUrl = await evaluate(cdp, sessionId, "location.href");
+    const url = new URL(currentUrl);
+    if (url.hostname === "sem.3ue.com" && url.searchParams.get("q") && url.searchParams.get("db")) {
+      url.pathname = "/analytics/keywordmagic/";
+      await navigateAndWait(cdp, sessionId, url.toString(), 45000).catch(async () => {
+        await sleep(3000);
+      });
+      return;
+    }
+    throw error;
+  }
   const result = await evaluate(
     cdp,
     sessionId,
